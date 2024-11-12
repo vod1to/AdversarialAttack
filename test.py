@@ -9,7 +9,7 @@ import numpy as np
 
 def load_model(model_path, num_classes):
     """Load the trained model"""
-    model = models.resnet18(pretrained=False)
+    model = models.resnet18(weights = None)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     model.load_state_dict(torch.load(model_path))
     return model
@@ -53,11 +53,15 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     
-    # Paths
-    dataset_path = "E:/lfw/lfw-py/lfw_funneled"  # Replace with your LFW dataset path
-    model_path = "outputs/face_recognition_model.pth"  # Path to your saved model
+    type = input("enter dataset type:")
+    match type:
+        case "normal":
+            model_path = "outputs/face_recognition_model_normal_dataset.pth"  
+        case 'attackPattern':
+            model_path = "outputs/face_recognition_model_attacked_dataset.pth"
     
     # Load dataset to get class information
+    dataset_path = "E:/lfw/lfw-py/lfw_funneled"  
     dataset = datasets.ImageFolder(dataset_path, transform=transform)
     num_classes = len(dataset.classes)
     idx_to_class = {v: k for k, v in dataset.class_to_idx.items()}
