@@ -15,7 +15,7 @@ def load_model(model_path, num_classes):
     model.load_state_dict(torch.load(model_path))
     return model
 
-def get_random_normal_images(dataset_path, num_images=100):
+def get_random_normal_images(dataset_path, num_images):
     """Retrieve random image paths and class names (labels) from the dataset directory"""
     all_images = []
     for root, dirs, files in os.walk(dataset_path):
@@ -78,13 +78,13 @@ def main():
     model.eval()
     
     # Select and attack images
-    images = get_random_normal_images(dataset_path, num_images=100)
+    images = get_random_normal_images(dataset_path, num_images=1000)
     test_images = attack_image(selected_images=images, model=model, device=device, transform=transform, class_to_idx=class_to_idx)
     
     correct = 0
     results = []
 
-    print("\nTesting 100 adversarial images...")
+    print("\nTesting 1000 adversarial images...")
     print("-" * 50)
     
     for i, (adv_image, true_class_idx) in enumerate(test_images, 1):

@@ -13,7 +13,7 @@ def load_model(model_path, num_classes):
     model.load_state_dict(torch.load(model_path))
     return model
 
-def get_random_normal_images(dataset_path, num_images=100):
+def get_random_normal_images(dataset_path, num_images):
     all_images = []
     for root, dirs,  files in os.walk(dataset_path):
         for file in files:
@@ -55,7 +55,7 @@ def main():
     model = model.to(device)
     model.eval()
     
-    test_images = get_random_normal_images(dataset_path, num_images=100)
+    test_images = get_random_normal_images(dataset_path, num_images=1000)
     
     correct = 0
     results = []
