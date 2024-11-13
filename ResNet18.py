@@ -48,4 +48,4 @@ for epoch in range(num_epochs):
     print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}, Train Accuracy: {100 * correct/total:.2f}%")
 
 
-torch.save(model.state_dict(), "outputs/face_recognition_model_normal_dataset.pth")
+torch.save(model.state_dict(), "outputs/ResNet18Trained.pth")
