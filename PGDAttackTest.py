@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torchattacks
 from torchvision import datasets, transforms, models
-import matplotlib.pyplot as plt
 from PIL import Image
 
 
