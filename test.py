@@ -21,16 +21,12 @@ class DeepFaceAdversarialFramework:
     def prepare_pairs(self):
         """Prepare image pairs for verification"""
         pairs = []
-        # Filter only directories
-        classes = [d for d in os.listdir(self.data_dir) 
-                  if os.path.isdir(os.path.join(self.data_dir, d))]
+        classes = os.listdir(self.data_dir)
         
         # Generate genuine pairs (same person)
         for person in classes:
             person_dir = os.path.join(self.data_dir, person)
-            # Filter only image files
-            images = [f for f in os.listdir(person_dir) 
-                     if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            images = os.listdir(person_dir)
             if len(images) >= 2:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
@@ -58,7 +54,6 @@ class DeepFaceAdversarialFramework:
         except Exception as e:
             print(f"Error in verification: {e}")
             return False
-
 
     def apply_attack(self, image_path, attack_type, epsilon=0.03):
         """Apply adversarial attack to image"""
