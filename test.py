@@ -14,7 +14,6 @@ class DeepFaceAttackFramework:
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
                   if os.path.isdir(os.path.join(self.data_dir, d))]
-        
         # Same person pairs
         for person in classes:
             person_dir = os.path.join(self.data_dir, person)
@@ -33,7 +32,7 @@ class DeepFaceAttackFramework:
         
         return pairs
 
-    def apply_fgsm_attack(self, img_path, epsilon=0.03):
+    def apply_fgsm_attack(self, img_path, epsilon=0.3):
         # Load image
         img = cv2.imread(img_path)
         
