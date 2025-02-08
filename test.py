@@ -36,7 +36,7 @@ class DeepFaceAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 51:
+            if len(pairs) == 100:
                 break
         return pairs
 
@@ -80,60 +80,78 @@ class DeepFaceAttackFramework:
         return np.dot(embedding1, embedding2) / (norm1 * norm2)
 
     def compute_gradient_batch(self, img_path, target_embedding, label, batch_size=16):
-        """Compute gradient more efficiently using batching"""
+        """Compute gradient accounting for DeepFace's preprocessing steps"""
         epsilon = 1e-5
+        
+        # Read image in BGR format
         img = cv2.imread(img_path)
         if img is None:
             raise ValueError(f"Failed to load image: {img_path}")
+        
+        # Keep original BGR format, just normalize to [0,1]
         img = img.astype(np.float32) / 255.0
         gradient = np.zeros_like(img)
         
-        # Get base embedding once
-        base_path = self.save_image(img, 'base.jpg')
+        # Get base embedding with all DeepFace's preprocessing steps
+        base_path = self.save_image(img * 255, 'base.jpg')  # Save denormalized image
         base_embedding = self.compute_embedding(base_path)
+        if base_embedding is None:
+            os.remove(base_path)
+            return np.zeros_like(img)
+            
         base_sim = self.compute_cosine_similarity(target_embedding, base_embedding)
         
         height, width = img.shape[:2]
-        step = 4
+        step = 2
         
-        # Process pixels in batches
+        # Process in batches while preserving BGR order
         for h_start in range(0, height, step * batch_size):
             h_end = min(h_start + step * batch_size, height)
             for w_start in range(0, width, step * batch_size):
                 w_end = min(w_start + step * batch_size, width)
                 
                 # Create batch of perturbed images
-                batch_img = np.tile(img[h_start:h_end, w_start:w_end], (3, 1, 1, 1))
-                
-                # Apply perturbations to batch
-                for idx, channel in enumerate(range(3)):
-                    batch_img[idx, :, :, channel] += epsilon
-                
-                # Process batch
                 batch_results = []
-                for b_idx in range(3):
+                for channel in range(3):  # BGR order
                     temp_img = img.copy()
-                    temp_img[h_start:h_end, w_start:w_end] = batch_img[b_idx]
-                    temp_path = self.save_image(temp_img, f'batch_{b_idx}.jpg')
+                    temp_img[h_start:h_end, w_start:w_end, channel] += epsilon
+                    # Clip to valid range
+                    temp_img = np.clip(temp_img, 0, 1)
+                    
+                    # Save denormalized image for DeepFace
+                    temp_path = self.save_image(temp_img * 255, f'batch_{channel}.jpg')
+                    
+                    # Get embedding through DeepFace's full pipeline
                     perturbed_embedding = self.compute_embedding(temp_path)
+                    
                     if perturbed_embedding is not None:
                         sim = self.compute_cosine_similarity(target_embedding, perturbed_embedding)
                         batch_results.append(sim)
+                    else:
+                        batch_results.append(base_sim)
+                        
                     os.remove(temp_path)
                 
-                # Compute gradients for batch
+                # Compute gradients for the batch
                 if len(batch_results) == 3:
                     for h in range(h_start, h_end, step):
                         for w in range(w_start, w_end, step):
+                            h_block = min(step, h_end - h)
+                            w_block = min(step, w_end - w)
+                            
                             for c in range(3):
                                 grad_val = (batch_results[c] - base_sim) / epsilon
+                                
                                 if label == 1:
                                     grad_val = -grad_val
-                                # Apply gradient to block
-                                h_block = min(step, h_end - h)
-                                w_block = min(step, w_end - w)
+                                
                                 gradient[h:h+h_block, w:w+w_block, c] = grad_val
         
+        # Normalize gradient
+        grad_norm = np.linalg.norm(gradient)
+        if grad_norm > 0:
+            gradient = gradient / grad_norm
+            
         os.remove(base_path)
         return gradient
 
@@ -146,7 +164,7 @@ class DeepFaceAttackFramework:
         perturbed_img = img + perturbation
         perturbed_img = np.clip(perturbed_img, 0, 1)
         
-        return self.save_image(perturbed_img, "temp_adv.jpg")
+        return self.save_image(perturbed_img*225, "temp_adv.jpg")
 
     def apply_pgd_attack(self, img_path, target_embedding, epsilon=0.5, 
                         alpha=0.05, steps=10, label=None):
@@ -166,7 +184,7 @@ class DeepFaceAttackFramework:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
         
-        return self.save_image(perturbed_img, "temp_adv.jpg")
+        return self.save_image(perturbed_img*225, "temp_adv.jpg")
 
     def verify_pair(self, img1_path, img2_path):
         """Verify a pair of images using DeepFace"""
@@ -175,7 +193,10 @@ class DeepFaceAttackFramework:
                 img1_path=img1_path,
                 img2_path=img2_path,
                 model_name=self.model_name,
-                enforce_detection=False
+                enforce_detection=False,
+                detector_backend='opencv',  # Make consistent with represent()
+                distance_metric='cosine',   # Explicitly use cosine distance
+                align=True                  
             )
             return result['verified']
         except Exception as e:
@@ -271,7 +292,7 @@ class DeepFaceAttackFramework:
 if __name__ == "__main__":
     framework = DeepFaceAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_name="Facenet"
+        model_name="VGG-Face"
     )
     results = framework.run_evaluation()
     
