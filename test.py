@@ -25,6 +25,8 @@ class DeepFaceAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
+            if len(pairs) == 50:
+                break
         
         # Different person pairs
         for i in range(len(classes)):
@@ -34,6 +36,8 @@ class DeepFaceAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
+            if len(pairs) == 51:
+                break
         return pairs
 
     def save_image(self, img_array, path):
@@ -51,8 +55,9 @@ class DeepFaceAttackFramework:
             result = DeepFace.represent(
                 img_path=img_path,
                 model_name=self.model_name,
-                max_faces=1,
-                enforce_detection=False
+                enforce_detection=False,
+                detector_backend='opencv',
+                max_faces=1
             )
             
             if not result or len(result) == 0:
@@ -74,9 +79,9 @@ class DeepFaceAttackFramework:
             return 0
         return np.dot(embedding1, embedding2) / (norm1 * norm2)
 
-    def compute_gradient_batch(self, img_path, target_embedding, label, batch_size=128):
+    def compute_gradient_batch(self, img_path, target_embedding, label, batch_size=16):
         """Compute gradient more efficiently using batching"""
-        epsilon = 1e-7
+        epsilon = 1e-5
         img = cv2.imread(img_path)
         if img is None:
             raise ValueError(f"Failed to load image: {img_path}")
@@ -89,7 +94,7 @@ class DeepFaceAttackFramework:
         base_sim = self.compute_cosine_similarity(target_embedding, base_embedding)
         
         height, width = img.shape[:2]
-        step = 32
+        step = 4
         
         # Process pixels in batches
         for h_start in range(0, height, step * batch_size):
@@ -132,7 +137,7 @@ class DeepFaceAttackFramework:
         os.remove(base_path)
         return gradient
 
-    def apply_fgsm_attack(self, img_path, target_embedding, epsilon=0.3, label=None):
+    def apply_fgsm_attack(self, img_path, target_embedding, epsilon=0.5, label=None):
         img = cv2.imread(img_path)
         img = img.astype(np.float32) / 255.0
         
@@ -143,8 +148,8 @@ class DeepFaceAttackFramework:
         
         return self.save_image(perturbed_img, "temp_adv.jpg")
 
-    def apply_pgd_attack(self, img_path, target_embedding, epsilon=0.3, 
-                        alpha=0.01, steps=20, label=None):
+    def apply_pgd_attack(self, img_path, target_embedding, epsilon=0.5, 
+                        alpha=0.05, steps=10, label=None):
         img = cv2.imread(img_path)
         img = img.astype(np.float32) / 255.0
         perturbed_img = img.copy()
@@ -170,6 +175,7 @@ class DeepFaceAttackFramework:
                 img1_path=img1_path,
                 img2_path=img2_path,
                 model_name=self.model_name,
+                enforce_detection=False
             )
             return result['verified']
         except Exception as e:
@@ -203,13 +209,18 @@ class DeepFaceAttackFramework:
                 if label == 1:
                     if prediction: 
                         results['true_positive'] += 1
+                        print(f"True Positive: {img1_path} - {img2_path}")
                     else: 
                         results['false_negative'] += 1
+                        print(f"False Negative: {img1_path} - {img2_path}")
                 else:
                     if prediction: 
                         results['false_positive'] += 1
+                        print(f"False Positive: {img1_path} - {img2_path}")
                     else: 
-                        results['true_negative'] += 1                
+                        results['true_negative'] += 1
+                        print(f"True Negative: {img1_path} - {img2_path}")
+                
                 # Clean up
                 if os.path.exists(adv_img_path):
                     os.remove(adv_img_path)
@@ -230,7 +241,7 @@ class DeepFaceAttackFramework:
             'attack_success_rate': (results['false_negative'] + results['false_positive']) / total}
     def run_evaluation(self):
         results = {}
-        '''# Clean performance
+        # Clean performance
         print("Evaluating clean performance...")
         clean_results = {'true_positive': 0, 'true_negative': 0,
                         'false_positive': 0, 'false_negative': 0}
@@ -249,17 +260,18 @@ class DeepFaceAttackFramework:
             'accuracy': (clean_results['true_positive'] + clean_results['true_negative']) / total,
             'far': clean_results['false_positive'] / (clean_results['false_positive'] + clean_results['true_negative']),
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
-        }'''
+        }
         # Attack evaluations
         for attack_type in ["FGSM", "PGD"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
         
         return results
+
 if __name__ == "__main__":
     framework = DeepFaceAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_name="OpenFace"
+        model_name="Facenet"
     )
     results = framework.run_evaluation()
     
