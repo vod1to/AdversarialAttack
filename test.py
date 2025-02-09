@@ -3,7 +3,6 @@ from deepface import DeepFace
 import cv2
 from tqdm import tqdm
 import os
-import tensorflow as tf
 
 class DeepFaceAttackFramework:
     def __init__(self, data_dir, model_name):
@@ -155,7 +154,7 @@ class DeepFaceAttackFramework:
         os.remove(base_path)
         return gradient
 
-    def apply_fgsm_attack(self, img_path, target_embedding, epsilon=0.5, label=None):
+    def apply_fgsm_attack(self, img_path, target_embedding, epsilon=0.3, label=None):
         img = cv2.imread(img_path)
         img = img.astype(np.float32) / 255.0
         
@@ -166,8 +165,8 @@ class DeepFaceAttackFramework:
         
         return self.save_image(perturbed_img*225, "temp_adv.jpg")
 
-    def apply_pgd_attack(self, img_path, target_embedding, epsilon=0.5, 
-                        alpha=0.05, steps=10, label=None):
+    def apply_pgd_attack(self, img_path, target_embedding, epsilon=0.3, 
+                        alpha=0.03, steps=10, label=None):
         img = cv2.imread(img_path)
         img = img.astype(np.float32) / 255.0
         perturbed_img = img.copy()
@@ -194,8 +193,8 @@ class DeepFaceAttackFramework:
                 img2_path=img2_path,
                 model_name=self.model_name,
                 enforce_detection=False,
-                detector_backend='opencv',  # Make consistent with represent()
-                distance_metric='cosine',   # Explicitly use cosine distance
+                detector_backend='opencv',  
+                distance_metric='cosine',   
                 align=True                  
             )
             return result['verified']
