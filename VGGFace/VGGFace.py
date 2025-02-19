@@ -37,7 +37,7 @@ class VGG_16(nn.Module):
         self.fc7 = nn.Linear(4096, 4096)
         self.fc8 = nn.Linear(4096, 2622)
 
-    def load_weights(self, path="pretrained/VGG_FACE.t7"):
+    def load_weights(self, path="VGGFace/pretrained/VGG_FACE.t7"):
         """ Function to load luatorch pretrained
 
         Args:
