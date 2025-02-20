@@ -8,77 +8,7 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 import os
-
-class VGGFace(nn.Module):
-    """VGG-Face implementation"""
-    def __init__(self):
-        super().__init__()
-        self.block_size = [2, 2, 3, 3, 3]
-        self.conv1_1 = nn.Conv2d(3, 64, 3, stride=1, padding=1)
-        self.conv1_2 = nn.Conv2d(64, 64, 3, stride=1, padding=1)
-        self.conv2_1 = nn.Conv2d(64, 128, 3, stride=1, padding=1)
-        self.conv2_2 = nn.Conv2d(128, 128, 3, stride=1, padding=1)
-        self.conv3_1 = nn.Conv2d(128, 256, 3, stride=1, padding=1)
-        self.conv3_2 = nn.Conv2d(256, 256, 3, stride=1, padding=1)
-        self.conv3_3 = nn.Conv2d(256, 256, 3, stride=1, padding=1)
-        self.conv4_1 = nn.Conv2d(256, 512, 3, stride=1, padding=1)
-        self.conv4_2 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.conv4_3 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.conv5_1 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.conv5_2 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.conv5_3 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.fc6 = nn.Linear(512 * 7 * 7, 4096)
-        self.fc7 = nn.Linear(4096, 4096)
-        self.fc8 = nn.Linear(4096, 2622)
-
-    def forward(self, x):
-        x = F.relu(self.conv1_1(x))
-        x = F.relu(self.conv1_2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2_1(x))
-        x = F.relu(self.conv2_2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv3_1(x))
-        x = F.relu(self.conv3_2(x))
-        x = F.relu(self.conv3_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv4_1(x))
-        x = F.relu(self.conv4_2(x))
-        x = F.relu(self.conv4_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv5_1(x))
-        x = F.relu(self.conv5_2(x))
-        x = F.relu(self.conv5_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc6(x))
-        x = F.dropout(x, 0.5, self.training)
-        x = F.relu(self.fc7(x))
-        x = F.dropout(x, 0.5, self.training)
-        return self.fc8(x)
-    def get_features(self, x):
-        x = F.relu(self.conv1_1(x))
-        x = F.relu(self.conv1_2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2_1(x))
-        x = F.relu(self.conv2_2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv3_1(x))
-        x = F.relu(self.conv3_2(x))
-        x = F.relu(self.conv3_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv4_1(x))
-        x = F.relu(self.conv4_2(x))
-        x = F.relu(self.conv4_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv5_1(x))
-        x = F.relu(self.conv5_2(x))
-        x = F.relu(self.conv5_3(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc6(x))
-        x = F.relu(self.fc7(x))
-        return x
+from ..Model.Architecture.VGGFaceArchitecture import VGGFace
 class VGGAttackFramework:
     def __init__(self, data_dir, model_path, device='cuda'):
         self.data_dir = data_dir
@@ -102,7 +32,7 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 5:
+            if len(pairs) == 50:
                 break
         
         # Different person pairs
@@ -113,7 +43,7 @@ class VGGAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 10:
+            if len(pairs) == 100:
                 break
         return pairs
     def extract_features(self, img_path):
@@ -206,9 +136,7 @@ class VGGAttackFramework:
             
             # For normalized vectors:
             # - Distance of 0 means identical
-            # - Distance of sqrt(2) ≈ 1.414 means orthogonal
             # - Distance of 2 means opposite
-            print(l2_distance)
             return l2_distance < threshold
             
         except Exception as e:
@@ -242,7 +170,7 @@ class VGGAttackFramework:
 if __name__ == "__main__":
     framework = VGGAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_path='E:/AdversarialAttack-2/VGGFace/vgg_face_dag.pth'
+        model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
     
