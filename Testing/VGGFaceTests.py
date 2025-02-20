@@ -32,7 +32,7 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
+            if len(pairs) < 0:
                 break
         
         # Different person pairs
@@ -60,7 +60,7 @@ class VGGAttackFramework:
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).view(1, 3, 224, 224)
         
         # VGG Face mean subtraction
-        mean = torch.Tensor(np.array([129.1863/255.0, 104.7624/255.0, 93.5940/255.0])).double().view(1, 3, 1, 1)
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).double().view(1, 3, 1, 1)
 
         img1 -= mean
         img2 -= mean

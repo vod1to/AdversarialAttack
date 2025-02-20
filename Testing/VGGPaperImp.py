@@ -30,7 +30,7 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
+            if len(pairs) == 5:
                 break
         
         # Different person pairs
@@ -41,7 +41,7 @@ class VGGAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 100:
+            if len(pairs) == 10:
                 break
         return pairs
     def extract_features(self, img_path):
