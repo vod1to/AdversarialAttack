@@ -1,14 +1,13 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-from torch.utils.data import Dataset, DataLoader
-import torchattacks
 import numpy as np
 import cv2
 from tqdm import tqdm
-import os
+import os,sys
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 from Model.Architecture.VGGFaceArchitecture import VGGFace
+
 
 class VGGAttackFramework:
     def __init__(self, data_dir, model_path, device='cuda'):
