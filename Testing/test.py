@@ -3,7 +3,7 @@ from deepface import DeepFace
 import cv2
 from tqdm import tqdm
 import os
-
+import torch
 class DeepFaceAttackFramework:
     def __init__(self, data_dir, model_name):
         self.data_dir = data_dir
