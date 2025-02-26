@@ -32,7 +32,7 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) < 0:
+            if len(pairs) == 50:
                 break
         
         # Different person pairs
@@ -60,8 +60,7 @@ class VGGAttackFramework:
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).view(1, 3, 224, 224)
         
         # VGG Face mean subtraction
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).double().view(1, 3, 1, 1)
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().view(1, 3, 1, 1)
         img1 -= mean
         img2 -= mean
         
@@ -69,8 +68,7 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
         
-        # Get features from fc7 layer
-        self.model.eval()
+        self.model.eval()      
         with torch.no_grad():
             # Forward pass until fc7 for both images
             feat1 = self.model.get_features(img1)
@@ -81,11 +79,137 @@ class VGGAttackFramework:
             l2_distance = torch.norm(feat1 - feat2, p=2).item()
             return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
-
-        return True
-    def generatePGDAttack(self, img1_path, img2_path, label = None):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
         
-        return True
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).view(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).view(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().view(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+
+        img1_adv = img1.clone().detach().requires_grad_(True)
+        epsilon = 8/255  # Attack strength parameter
+    
+        self.model.eval()
+        feat1 = self.model.get_features(img1_adv)
+        feat2 = self.model.get_features(img2)
+    
+        # Normalize features
+        feat1 = F.normalize(feat1, p=2, dim=1)
+        feat2 = F.normalize(feat2, p=2, dim=1)
+        
+        # Compute L2 distance
+        distance = torch.norm(feat1 - feat2, p=2)
+        
+        # Define loss based on attack goal
+        if label == 1:  # We want to decrease distance (make different people look same)
+            loss = distance
+        else:  # We want to increase distance (make same person look different)
+            loss = -distance
+        
+        # Compute gradient
+        loss.backward()
+        
+        # Create adversarial example with FGSM
+        with torch.no_grad():
+            # Get the sign of the gradients
+            grad_sign = img1_adv.grad.sign()
+            # Apply perturbation
+            perturbed_image = img1 + epsilon * grad_sign
+            # Clamp to ensure valid pixel range
+            perturbed_image = torch.clamp(perturbed_image, 0, 255)
+            
+        
+        # Convert back to image format and save
+        adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
+        adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
+        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        
+        # Save the adversarial example
+        output_path = img1_path.replace('.jpg', '_fgsm_adv.jpg')
+        cv2.imwrite(output_path, adv_img)
+        
+        return output_path
+    def generatePGDAttack(self, img1_path, img2_path, label = None):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).view(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).view(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().view(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+
+        epsilon = 8/255  # Total perturbation constraint
+        alpha = epsilon/10  # Step size
+        steps = 20  # Number of attack iterations
+
+        self.model.eval()
+        perturbed_image = img1.clone().detach()
+        
+        # Add small random noise to start
+        perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon, epsilon)
+        perturbed_image = torch.clamp(perturbed_image, 0, 255).detach()
+        # Iterative attack
+        for _ in range(steps):
+            # Set requires_grad
+            perturbed_image.requires_grad = True
+            
+            # Forward pass to get features
+            feat1 = self.model.get_features(perturbed_image)
+            feat2 = self.model.get_features(img2)
+            
+            # Normalize features
+            feat1 = F.normalize(feat1, p=2, dim=1)
+            feat2 = F.normalize(feat2, p=2, dim=1)
+            
+            # Compute L2 distance
+            distance = torch.norm(feat1 - feat2, p=2)
+            
+            # Define loss based on attack goal
+            if label == 1:  # We want to decrease distance (make different people look same)
+                loss = distance
+            else:  # We want to increase distance (make same person look different)
+                loss = -distance
+            
+            # Compute gradient
+            loss.backward()
+            
+            # Take gradient step
+            grad = torch.autograd.grad(loss, perturbed_image, retain_graph=False, create_graph=False)[0]
+        
+            # Update and detach adversarial images
+            perturbed_image = perturbed_image.detach() - alpha * grad.sign()  # Note the minus sign
+            
+            # Project back to epsilon ball and valid image range
+            delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
+            perturbed_image = torch.clamp(img1 + delta, min=0, max=255).detach()
+        
+        # Convert to image and save
+        adv_img = perturbed_image[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_img += np.array([129.1863, 104.7624, 93.5940])
+        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        
+        output_path = img1_path.replace('.jpg', '_pgd_adv.jpg')
+        cv2.imwrite(output_path, adv_img)
+        
+        return output_path
+            
     def evaluate_attack(self, attack_type):
         """Evaluate attack performance"""
         results = {
@@ -140,6 +264,11 @@ class VGGAttackFramework:
             'attack_success_rate': (results['false_negative'] + results['false_positive']) / total}
     def run_evaluation(self):
         results = {}
+        # Attack evaluations
+        for attack_type in ["FGSM"]:
+            print(f"\nEvaluating {attack_type} attack...")
+            results[attack_type] = self.evaluate_attack(attack_type)
+        
         # Clean performance
         print("Evaluating clean performance...")
         clean_results = {'true_positive': 0, 'true_negative': 0,
@@ -161,13 +290,8 @@ class VGGAttackFramework:
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
         return results
-        # Attack evaluations
-        """
-        for attack_type in ["FGSM", "PGD"]:
-            print(f"\nEvaluating {attack_type} attack...")
-            results[attack_type] = self.evaluate_attack(attack_type)
-        
-        return results"""
+
+
 
 if __name__ == "__main__":
     framework = VGGAttackFramework(
