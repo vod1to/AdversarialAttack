@@ -42,7 +42,7 @@ class VGGFace(nn.Module):
         x = F.relu(self.conv5_2(x))
         x = F.relu(self.conv5_3(x))
         x = F.max_pool2d(x, 2, 2)
-        x = x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
         x = F.relu(self.fc6(x))
         x = F.dropout(x, 0.5, self.training)
         x = F.relu(self.fc7(x))
@@ -67,7 +67,7 @@ class VGGFace(nn.Module):
         x = F.relu(self.conv5_2(x))
         x = F.relu(self.conv5_3(x))
         x = F.max_pool2d(x, 2, 2)
-        x = x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
         x = F.relu(self.fc6(x))
         x = F.relu(self.fc7(x))
         return x
