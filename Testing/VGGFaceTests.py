@@ -482,6 +482,7 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
+<<<<<<< HEAD
     def generateSPSAAttack(self, img1_path, img2_path, label=None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -692,10 +693,13 @@ class VGGAttackFramework:
                     adv_img_path = self.generateMIFGSMAttack(img1_path, img2_path, label)
                 elif attack_type == "CW":
                     adv_img_path = self.generateCWAttack(img1_path, img2_path, label)
+<<<<<<< HEAD
                 elif attack_type == "SPSA":
                     adv_img_path = self.generateSPSAAttack(img1_path, img2_path, label)
                 elif attack_type == "Square":
                     adv_img_path = self.generateSquareAttack(img1_path, img2_path, label)
+=======
+>>>>>>> c528bce8fc3f1045ca320ff8158a8d5af734b02d
                 # Verify
                 prediction = self.verify_pair(adv_img_path, img2_path)
                 
@@ -735,7 +739,11 @@ class VGGAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
+<<<<<<< HEAD
         for attack_type in ["FGSM","PGD","BIM","MIFGSM","CW", "SPSA","Square"]:
+=======
+        for attack_type in ["CW"]:
+>>>>>>> c528bce8fc3f1045ca320ff8158a8d5af734b02d
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
         
