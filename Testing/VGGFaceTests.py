@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 import os,sys
+import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from Model.Architecture.VGGFaceArchitecture import VGGFace
@@ -32,7 +33,7 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
+            if len(pairs) == 5:
                 break
         
         # Different person pairs
@@ -43,7 +44,7 @@ class VGGAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 100:
+            if len(pairs) == 10:
                 break
         return pairs
 
@@ -364,6 +365,312 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
+    def generateCWAttack(self, img1_path, img2_path, label=None, c=1.0, kappa=0, steps=30, lr=0.01):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+        
+        # Following torchattacks approach
+        self.model.eval()
+        
+        # Functions from torchattacks
+        def tanh_space(x):
+            return 0.5 * (torch.tanh(x) + 1)
+        
+        def inverse_tanh_space(x):
+            # Inverse of tanh_space in the range [0, 1]
+            return 0.5 * torch.log((1 + x*2 - 1) / (1 - (x*2 - 1)))
+        
+        # Initialize w in the inverse tanh space
+        w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
+        w.requires_grad = True
+        
+        # Set up optimizer
+        optimizer = torch.optim.Adam([w], lr=lr)
+        
+        # Initialize best adversarial example
+        best_adv_images = img1.clone().detach()
+        best_L2 = 1e10 * torch.ones((len(img1))).to(self.device)
+        prev_cost = 1e10
+        
+        # Extract features from target image
+        with torch.no_grad():
+            feat2 = self.model.get_features(img2)
+            feat2 = F.normalize(feat2, p=2, dim=1)
+        
+        # Prepare loss functions
+        MSELoss = nn.MSELoss(reduction="none")
+        Flatten = nn.Flatten()
+        
+        # Optimization loop
+        for step in range(steps):
+            # Get adversarial images in [0,1] space and rescale to original range
+            adv_images_norm = tanh_space(w)
+            adv_images = adv_images_norm * 255.0  # Back to [0,255] range
+            
+            # Calculate L2 distance loss (in pixel space)
+            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1 / 255.0)).sum(dim=1)
+            L2_loss = current_L2.sum()
+            
+            # Get features of adversarial image
+            feat1 = self.model.get_features(adv_images)
+            feat1 = F.normalize(feat1, p=2, dim=1)
+            
+            # Calculate feature distance
+            distance = torch.norm(feat1 - feat2, p=2, dim=1)
+            threshold = 1.0
+
+            
+            # Adapt f-function from torchattacks for our face recognition task
+            if label == 1:  # Decrease distance (make different people look same)
+                # We want distance to be minimized, so penalize if it's large
+                f_loss = torch.clamp(distance - kappa, min=0).sum()
+            else:  # Increase distance (make same person look different)
+                # We want distance to be maximized, so penalize if it's small
+                # Assuming a threshold of 1.0 for simplicity
+                f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
+            
+            # Total cost
+            cost = L2_loss + c * f_loss
+            
+            # Gradient step
+            optimizer.zero_grad()
+            cost.backward()
+            optimizer.step()
+            
+            # Update best adversarial images
+            # For face recognition, success condition is based on distance threshold
+            if label == 1:  # We want small distance
+                condition = (distance < threshold).float()
+            else:  # We want large distance
+                condition = (distance > threshold).float()
+            
+            # Filter out images that either don't meet the condition or have larger L2
+            mask = condition * (best_L2 > current_L2.detach())
+            best_L2 = mask * current_L2.detach() + (1 - mask) * best_L2
+            
+            # Update best adversarial images
+            mask = mask.view([-1] + [1] * (len(adv_images.shape) - 1))
+            best_adv_images = mask * adv_images.detach() + (1 - mask) * best_adv_images
+            
+            # Early stop when loss does not converge
+            if step % max(steps // 10, 1) == 0:
+                if cost.item() > prev_cost:
+                    break
+                prev_cost = cost.item()
+        
+        # Add mean back to final result
+        adv_output = best_adv_images[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
+
+        adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=255.0, neginf=0.0)
+        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        
+        output_path = img1_path.replace('.jpg', '_cw_torchattacks_adv.jpg')
+        cv2.imwrite(output_path, adv_output)
+        
+        return output_path
+    def generateSPSAAttack(self, img1_path, img2_path, label=None):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+
+        # SPSA parameters
+        epsilon = 8/255        # Total perturbation constraint
+        iterations = 100       # Number of attack iterations
+        learning_rate = 0.01   # Learning rate for optimization
+        delta = 0.01           # Perturbation size for gradient estimation
+        
+        # Extract features from target image
+        self.model.eval()
+        with torch.no_grad():
+            feat2 = self.model.get_features(img2)
+            feat2 = F.normalize(feat2, p=2, dim=1)
+        
+        # Initialize adversarial example with the original image
+        adv_img = img1.clone().detach()
+        
+        # Function to compute loss based on goal
+        def compute_loss(perturbed_img):
+            with torch.no_grad():
+                feat = self.model.get_features(perturbed_img)
+                feat = F.normalize(feat, p=2, dim=1)
+                distance = torch.norm(feat - feat2, p=2)
+                
+                # Define loss based on attack goal
+                if label == 1:  # Decrease distance (make different people look same)
+                    return distance
+                else:  # Increase distance (make same person look different)
+                    return -distance
+        
+        # SPSA attack loop
+        for i in range(iterations):
+            # Create random perturbation direction (Bernoulli distribution {-1, 1})
+            bernoulli = torch.randint(0, 2, adv_img.shape).to(self.device) * 2 - 1  # -1 or 1
+            
+            # Evaluate loss at points in both positive and negative directions
+            pos_perturbed = adv_img + delta * bernoulli
+            pos_perturbed = torch.clamp(pos_perturbed, 0, 255)
+            loss_pos = compute_loss(pos_perturbed)
+            
+            neg_perturbed = adv_img - delta * bernoulli
+            neg_perturbed = torch.clamp(neg_perturbed, 0, 255)
+            loss_neg = compute_loss(neg_perturbed)
+            
+            # Estimate gradient using finite differences
+            gradient_estimate = (loss_pos - loss_neg) / (2 * delta)
+            
+            # Update the adversarial example in the direction of the estimated gradient
+            # Note the sign: We use minus for gradient descent direction
+            if label == 1:  # Minimize distance
+                update_direction = -1
+            else:  # Maximize distance
+                update_direction = 1
+                
+            # Apply estimated gradient to update the adversarial example
+            adv_img = adv_img + update_direction * learning_rate * gradient_estimate * bernoulli
+            
+            # Project back to epsilon-ball around original image and ensure valid pixel range
+            delta_img = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
+            adv_img = img1 + delta_img
+            adv_img = torch.clamp(adv_img, 0, 255)
+            
+            # Optionally reduce learning rate over time (learning rate decay)
+            learning_rate = learning_rate * 0.99
+        
+        # Convert to image and save
+        adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
+        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        
+        output_path = img1_path.replace('.jpg', '_spsa_adv.jpg')
+        cv2.imwrite(output_path, adv_output)
+        return output_path
+    def generateSquareAttack(self, img1_path, img2_path, label=None, n_iters=1000, p_init=0.1):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+
+        # Square attack parameters
+        epsilon = 8/255 * 255  # Convert to [0, 255] scale
+        
+        # Extract features from target image
+        self.model.eval()
+        with torch.no_grad():
+            feat2 = self.model.get_features(img2)
+            feat2 = F.normalize(feat2, p=2, dim=1)
+        
+        # Initialize adversarial example with the original image
+        x_adv = img1.clone().detach()
+        
+        # Function to evaluate distance
+        def compute_distance(x):
+            with torch.no_grad():
+                feat = self.model.get_features(x)
+                feat = F.normalize(feat, p=2, dim=1)
+                distance = torch.norm(feat - feat2, p=2)
+                return distance.item()
+        
+        # Determine the best distance based on the attack goal
+        if label == 1:  # Make different people look same (minimize distance)
+            best_distance = compute_distance(x_adv)
+            is_better = lambda new_dist, curr_dist: new_dist < curr_dist
+        else:  # Make same person look different (maximize distance)
+            best_distance = -compute_distance(x_adv)
+            is_better = lambda new_dist, curr_dist: new_dist > curr_dist
+        
+        # Reshape image for easier manipulation
+        h, w = 224, 224  # Image height and width
+        
+        # Main attack loop
+        for i in range(n_iters):
+            # Calculate current p (decreases over iterations)
+            p = p_init * (1 - i / n_iters)**0.5
+            
+            # Calculate square size based on p
+            s = int(round(np.sqrt(p * h * w)))
+            s = max(1, min(s, h, w))
+            
+            # Randomly select square position
+            h_start = np.random.randint(0, h - s + 1)
+            w_start = np.random.randint(0, w - s + 1)
+            
+            # Randomly select channel to perturb (or all channels)
+            channel = np.random.choice([-1, 0, 1, 2])  # -1 means all channels
+            
+            # Create a copy of the current best adversarial example
+            x_new = x_adv.clone().detach()
+            
+            # Generate perturbation
+            noise = torch.empty((1, 1 if channel != -1 else 3, s, s), device=self.device).uniform_(-epsilon, epsilon)
+            
+            # Apply the perturbation to the selected region
+            if channel == -1:  # Apply to all channels
+                x_new[0, :, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
+                    img1[0, :, h_start:h_start+s, w_start:w_start+s] + noise, 0, 255)
+            else:  # Apply to specific channel
+                x_new[0, channel, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
+                    img1[0, channel, h_start:h_start+s, w_start:w_start+s] + noise.squeeze(1), 0, 255)
+            
+            # Calculate new distance
+            if label == 1:  # Minimize distance
+                new_distance = compute_distance(x_new)
+            else:  # Maximize distance
+                new_distance = -compute_distance(x_new)
+            
+            # Update best adversarial example if the perturbation improves it
+            if is_better(new_distance, best_distance):
+                x_adv = x_new
+                best_distance = new_distance
+                
+            # Early stopping if we've reached a very good solution
+            if (label == 1 and best_distance < 0.5) or (label == 0 and -best_distance > 2.0):
+                break
+        # Convert to image and save
+        adv_output = x_adv[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
+        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        
+        output_path = img1_path.replace('.jpg', '_square_adv.jpg')
+        cv2.imwrite(output_path, adv_output)
+        
+        return output_path
     def evaluate_attack(self, attack_type):
         """Evaluate attack performance"""
         results = {
@@ -382,6 +689,12 @@ class VGGAttackFramework:
                     adv_img_path = self.generateBIMAttack(img1_path, img2_path, label)
                 elif attack_type == "MIFGSM":
                     adv_img_path = self.generateMIFGSMAttack(img1_path, img2_path, label)
+                elif attack_type == "CW":
+                    adv_img_path = self.generateCWAttack(img1_path, img2_path, label)
+                elif attack_type == "SPSA":
+                    adv_img_path = self.generateSPSAAttack(img1_path, img2_path, label)
+                elif attack_type == "Square":
+                    adv_img_path = self.generateSquareAttack(img1_path, img2_path, label)
                 # Verify
                 prediction = self.verify_pair(adv_img_path, img2_path)
                 
@@ -421,7 +734,7 @@ class VGGAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["MIFGSM"]:
+        for attack_type in ["FGSM","PGD","BIM","MIFGSM","CW", "SPSA","Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
         
@@ -446,7 +759,6 @@ class VGGAttackFramework:
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
         return results
-
 
 
 if __name__ == "__main__":
