@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 import os,sys
+import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from Model.Architecture.VGGFaceArchitecture import VGGFace
@@ -364,6 +365,123 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
+    def generateCWAttack(self, img1_path, img2_path, label=None, c=1.0, kappa=0, steps=30, lr=0.01):
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        
+        img1 = cv2.resize(img1, (224, 224))
+        img2 = cv2.resize(img2, (224, 224))
+
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
+
+        img1 = img1.to(self.device)
+        img2 = img2.to(self.device)
+        
+        # Following torchattacks approach
+        self.model.eval()
+        
+        # Functions from torchattacks
+        def tanh_space(x):
+            return 0.5 * (torch.tanh(x) + 1)
+        
+        def inverse_tanh_space(x):
+            # Inverse of tanh_space in the range [0, 1]
+            return 0.5 * torch.log((1 + x*2 - 1) / (1 - (x*2 - 1)))
+        
+        # Initialize w in the inverse tanh space
+        w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
+        w.requires_grad = True
+        
+        # Set up optimizer
+        optimizer = torch.optim.Adam([w], lr=lr)
+        
+        # Initialize best adversarial example
+        best_adv_images = img1.clone().detach()
+        best_L2 = 1e10 * torch.ones((len(img1))).to(self.device)
+        prev_cost = 1e10
+        
+        # Extract features from target image
+        with torch.no_grad():
+            feat2 = self.model.get_features(img2)
+            feat2 = F.normalize(feat2, p=2, dim=1)
+        
+        # Prepare loss functions
+        MSELoss = nn.MSELoss(reduction="none")
+        Flatten = nn.Flatten()
+        
+        # Optimization loop
+        for step in range(steps):
+            # Get adversarial images in [0,1] space and rescale to original range
+            adv_images_norm = tanh_space(w)
+            adv_images = adv_images_norm * 255.0  # Back to [0,255] range
+            
+            # Calculate L2 distance loss (in pixel space)
+            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1 / 255.0)).sum(dim=1)
+            L2_loss = current_L2.sum()
+            
+            # Get features of adversarial image
+            feat1 = self.model.get_features(adv_images)
+            feat1 = F.normalize(feat1, p=2, dim=1)
+            
+            # Calculate feature distance
+            distance = torch.norm(feat1 - feat2, p=2, dim=1)
+            threshold = 1.0
+
+            
+            # Adapt f-function from torchattacks for our face recognition task
+            if label == 1:  # Decrease distance (make different people look same)
+                # We want distance to be minimized, so penalize if it's large
+                f_loss = torch.clamp(distance - kappa, min=0).sum()
+            else:  # Increase distance (make same person look different)
+                # We want distance to be maximized, so penalize if it's small
+                # Assuming a threshold of 1.0 for simplicity
+                f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
+            
+            # Total cost
+            cost = L2_loss + c * f_loss
+            
+            # Gradient step
+            optimizer.zero_grad()
+            cost.backward()
+            optimizer.step()
+            
+            # Update best adversarial images
+            # For face recognition, success condition is based on distance threshold
+            if label == 1:  # We want small distance
+                condition = (distance < threshold).float()
+            else:  # We want large distance
+                condition = (distance > threshold).float()
+            
+            # Filter out images that either don't meet the condition or have larger L2
+            mask = condition * (best_L2 > current_L2.detach())
+            best_L2 = mask * current_L2.detach() + (1 - mask) * best_L2
+            
+            # Update best adversarial images
+            mask = mask.view([-1] + [1] * (len(adv_images.shape) - 1))
+            best_adv_images = mask * adv_images.detach() + (1 - mask) * best_adv_images
+            
+            # Early stop when loss does not converge
+            if step % max(steps // 10, 1) == 0:
+                if cost.item() > prev_cost:
+                    break
+                prev_cost = cost.item()
+        
+        # Add mean back to final result
+        adv_output = best_adv_images[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
+
+        adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=255.0, neginf=0.0)
+        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        
+        output_path = img1_path.replace('.jpg', '_cw_torchattacks_adv.jpg')
+        cv2.imwrite(output_path, adv_output)
+        
+        return output_path
     def evaluate_attack(self, attack_type):
         """Evaluate attack performance"""
         results = {
@@ -382,6 +500,8 @@ class VGGAttackFramework:
                     adv_img_path = self.generateBIMAttack(img1_path, img2_path, label)
                 elif attack_type == "MIFGSM":
                     adv_img_path = self.generateMIFGSMAttack(img1_path, img2_path, label)
+                elif attack_type == "CW":
+                    adv_img_path = self.generateCWAttack(img1_path, img2_path, label)
                 # Verify
                 prediction = self.verify_pair(adv_img_path, img2_path)
                 
@@ -421,7 +541,7 @@ class VGGAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["MIFGSM"]:
+        for attack_type in ["CW"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
         
@@ -448,7 +568,6 @@ class VGGAttackFramework:
         return results
 
 
-
 if __name__ == "__main__":
     framework = VGGAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
@@ -460,3 +579,4 @@ if __name__ == "__main__":
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
+    print(framework.cw_test())
