@@ -671,6 +671,7 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
+
     def evaluate_attack(self, attack_type):
         """Evaluate attack performance"""
         results = {
