@@ -47,7 +47,6 @@ class VGGAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-
     def verify_pair(self, img1_path, img2_path, threshold=1.2):
         # Read and preprocess images
         img1 = cv2.imread(img1_path)
@@ -282,7 +281,6 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def generateMIFGSMAttack(self, img1_path, img2_path, label=None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -388,8 +386,7 @@ class VGGAttackFramework:
             return 0.5 * (torch.tanh(x) + 1)
         
         def inverse_tanh_space(x):
-            # Inverse of tanh_space in the range [0, 1]
-            return 0.5 * torch.log((1 + x*2 - 1) / (1 - (x*2 - 1)))
+            return torch.atanh(torch.clamp(x * 2 - 1, min=-1, max=1))
         
         # Initialize w in the inverse tanh space
         w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
@@ -476,7 +473,7 @@ class VGGAttackFramework:
         adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=255.0, neginf=0.0)
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
-        output_path = img1_path.replace('.jpg', '_cw_torchattacks_adv.jpg')
+        output_path = img1_path.replace('.jpg', '_cw_adv.jpg')
         cv2.imwrite(output_path, adv_output)
         
         return output_path
@@ -735,7 +732,7 @@ class VGGAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM"]:
+        for attack_type in ["FGSM","PGD","BIM","MIFGSM","Square","SPSA","CW"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
