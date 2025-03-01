@@ -5,21 +5,29 @@ import cv2
 from tqdm import tqdm
 import os,sys
 import torch.nn as nn
+from facenet_pytorch import MTCNN, InceptionResnetV1
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-from Model.Architecture.VGGFaceArchitecture import VGGFace
+from PIL import Image
 
-
-class VGGAttackFramework:
-    def __init__(self, data_dir, model_path, device='cuda'):
+class FacenetAttackFramework:
+    def __init__(self, data_dir, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
         
         # Initialize model
-        self.model = VGGFace().to(self.device)
-        self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()        
+        self.model = InceptionResnetV1(pretrained="vggface2").eval()
+        self.model.eval()
+        self.mtcnn = MTCNN(
+            image_size=224, 
+            margin=20,       # Add margin around the face
+            min_face_size=20,
+            thresholds=[0.6, 0.7, 0.9],  # MTCNN thresholds
+            factor=0.709,
+            post_process=True,
+            device=self.device
+        )    
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
@@ -47,38 +55,16 @@ class VGGAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-
-    def verify_pair(self, img1_path, img2_path, threshold=1.2):
-        # Read and preprocess images
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-        
-        # Convert to torch tensor and normalize
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        
-        # VGG Face mean subtraction
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-        
-        # Move to device
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-        
-        self.model.eval()      
-        with torch.no_grad():
-            # Forward pass until fc7 for both images
-            feat1 = self.model.get_features(img1)
-            feat2 = self.model.get_features(img2)
-            feat1 = F.normalize(feat1, p=2, dim=1)
-            feat2 = F.normalize(feat2, p=2, dim=1)
-            # Compute L2 distance
-            l2_distance = torch.norm(feat1 - feat2, p=2).item()
-            return l2_distance < threshold
+    def verify_pair(self, img1_path, img2_path, threshold=1.242):
+        # Preprocess images using MTCNN
+        img1 = Image.open(img1_path)
+        img2 = Image.open(img2_path)
+        img1_cropped = self.mtcnn(img1)
+        img2_cropped = self.mtcnn(img2)
+        emb1 = self.model(img1_cropped.unsqueeze(0))
+        emb2 = self.model(img2_cropped.unsqueeze(0))
+        l2_distance = torch.norm(emb1 - emb2, p=2).item()
+        return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -100,8 +86,8 @@ class VGGAttackFramework:
         epsilon = 8/255  # Attack strength parameter
     
         self.model.eval()
-        feat1 = self.model.get_features(img1_adv)
-        feat2 = self.model.get_features(img2)
+        feat1 = self.model.forward(img1_adv)
+        feat2 = self.model.forward(img2)
     
         # Normalize features
         feat1 = F.normalize(feat1, p=2, dim=1)
@@ -115,15 +101,16 @@ class VGGAttackFramework:
             loss = distance
         else:  # We want to increase distance (make same person look different)
             loss = -distance
-        
-
-        grad_sign = torch.autograd.grad(loss, img1_adv)[0]
-        # Apply perturbation
-        perturbed_image = img1 + epsilon * grad_sign.sign()
-        # Clamp to ensure valid pixel range
-        perturbed_image = torch.clamp(perturbed_image, 0, 255)
+                
+        # Create adversarial example with FGSM
+        with torch.no_grad():
+            # Get the sign of the gradients
+            grad_sign = torch.autograd.grad(loss, img1_adv)[0]
+            # Apply perturbation
+            perturbed_image = img1 + epsilon * grad_sign.sign()
+            # Clamp to ensure valid pixel range
+            perturbed_image = torch.clamp(perturbed_image, 0, 255)
             
-        
         # Convert back to image format and save
         adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
         adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
@@ -135,21 +122,8 @@ class VGGAttackFramework:
         
         return output_path
     def generatePGDAttack(self, img1_path, img2_path, label = None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
 
         epsilon = 8/255  # Total perturbation constraint
         alpha = epsilon/10  # Step size
@@ -209,22 +183,8 @@ class VGGAttackFramework:
         
         return output_path
     def generateBIMAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
         # BIM parameters
         epsilon = 8/255      # Total perturbation constraint
         alpha = epsilon/10   # Step size per iteration
@@ -282,23 +242,9 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def generateMIFGSMAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
 
         # MI-FGSM parameters
         epsilon = 8/255       # Total perturbation constraint
@@ -364,21 +310,8 @@ class VGGAttackFramework:
         
         return output_path
     def generateCWAttack(self, img1_path, img2_path, label=None, c=1.0, kappa=0, steps=30, lr=0.01):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
         
         # Following torchattacks approach
         self.model.eval()
@@ -481,21 +414,8 @@ class VGGAttackFramework:
         
         return output_path
     def generateSPSAAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
 
         # SPSA parameters
         epsilon = 8/255        # Total perturbation constraint
@@ -569,22 +489,8 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         return output_path
     def generateSquareAttack(self, img1_path, img2_path, label=None, n_iters=1000, p_init=0.1):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
+        img1 = self.preprocess_with_mtcnn(img1_path)
+        img2 = self.preprocess_with_mtcnn(img2_path)
         # Square attack parameters
         epsilon = 8/255 * 255  # Convert to [0, 255] scale
         
@@ -669,7 +575,6 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def evaluate_attack(self, attack_type):
         """Evaluate attack performance"""
         results = {
@@ -720,6 +625,7 @@ class VGGAttackFramework:
                 
             except Exception as e:
                 print(f"Error processing pair: {e}")
+                raise
         
         # Calculate metrics
         total = sum(results.values())
@@ -733,12 +639,13 @@ class VGGAttackFramework:
             'attack_success_rate': (results['false_negative'] + results['false_positive']) / total}
     def run_evaluation(self):
         results = {}
-        # Attack evaluations
 
-        for attack_type in ["FGSM"]:
+        # Attack evaluations
+        for attack_type in []:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
-       # Clean performance
+
+        # Clean performance
         print("Evaluating clean performance...")
         clean_results = {'true_positive': 0, 'true_negative': 0,
                         'false_positive': 0, 'false_negative': 0}
@@ -762,9 +669,8 @@ class VGGAttackFramework:
 
 
 if __name__ == "__main__":
-    framework = VGGAttackFramework(
+    framework = FacenetAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
     
