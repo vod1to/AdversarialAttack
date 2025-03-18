@@ -49,7 +49,7 @@ class FacenetAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-    def verify_pair(self, img1_path, img2_path, threshold=1.1):
+    def verify_pair(self, img1_path, img2_path, threshold=1.2):
         # Preprocess images using MTCNN
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -196,7 +196,7 @@ class FacenetAttackFramework:
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() - alpha * grad.sign()  # Note the minus sign
+            perturbed_image = perturbed_image.detach() + alpha * grad.sign()  # Note the minus sign
             
             # Project back to epsilon ball and valid image range
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
@@ -204,7 +204,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_img = (perturbed_image[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        adv_img = (adv_img * 255.0).astype(np.uint8)
         adv_img = cv2.cvtColor(adv_img, cv2.COLOR_RGB2BGR)
 
         output_path = img1_path.replace('.jpg', '_pgd_adv.jpg')
@@ -276,7 +276,7 @@ class FacenetAttackFramework:
             adv_img = adv_img.detach()
             
             # Update adversarial image with sign of gradient (FGSM-like step)
-            adv_img = adv_img - alpha * torch.sign(grad)
+            adv_img = adv_img + alpha * torch.sign(grad)
             a = torch.clamp(ori_img - epsilon, min=0)
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
             c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
@@ -286,7 +286,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_output = (adv_img[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        adv_output = (adv_output * 255.0).astype(np.uint8)
         adv_output = cv2.cvtColor(adv_output, cv2.COLOR_RGB2BGR)
         
         output_path = img1_path.replace('.jpg', '_bim_adv.jpg')
@@ -366,7 +366,7 @@ class FacenetAttackFramework:
             # Update momentum term
             grad = grad + momentum * decay_factor
             momentum = grad            
-            adv_img = adv_img - alpha * grad.sign()
+            adv_img = adv_img + alpha * grad.sign()
             
             delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta
@@ -374,7 +374,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_output = (adv_img[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        adv_output = (adv_output * 255.0).astype(np.uint8)
         adv_output = cv2.cvtColor(adv_output, cv2.COLOR_RGB2BGR)
         
         output_path = img1_path.replace('.jpg', '_mifgsm_adv.jpg')
@@ -417,10 +417,11 @@ class FacenetAttackFramework:
         
         def inverse_tanh_space(x):
             # Inverse of tanh_space in the range [0, 1]
+            x = torch.clamp(x, -0.999, 0.999)
             return 0.5 * torch.log((1 + x*2 - 1) / (1 - (x*2 - 1)))
         
         # Initialize w in the inverse tanh space
-        w = inverse_tanh_space(img1).detach()  # Convert to [0,1] range first
+        w = inverse_tanh_space((img1 + 1)/2).detach()  # Convert to [0,1] range first
         w.requires_grad = True
         
         # Set up optimizer
@@ -443,10 +444,10 @@ class FacenetAttackFramework:
         for step in range(steps):
             # Get adversarial images in [0,1] space and rescale to original range
             adv_images_norm = tanh_space(w)
-            adv_images = adv_images_norm# Back to [0,255] range
-            
+            adv_images = adv_images_norm * 2.0 - 1.0  # Added this line
+
             # Calculate L2 distance loss (in pixel space)
-            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1)).sum(dim=1)
+            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten((img1 + 1) / 2)).sum(dim=1)  # Changed from Flatten(img1)
             L2_loss = current_L2.sum()
             
             # Get features of adversarial image
@@ -497,9 +498,9 @@ class FacenetAttackFramework:
         
         # Add mean back to final result
         adv_output = (best_adv_images[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-
-        adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=1, neginf=-1)
-        adv_output = np.clip(adv_output, -1, 1).astype(np.uint8)
+        adv_output = np.nan_to_num(adv_output, nan=0.5, posinf=1, neginf=0)
+        adv_output = np.clip(adv_output, 0.0, 1.0)
+        adv_output = (adv_output * 255.0).astype(np.uint8)
         adv_output = cv2.cvtColor(adv_output, cv2.COLOR_RGB2BGR)
 
         output_path = img1_path.replace('.jpg', '_cw_torchattacks_adv.jpg')
@@ -598,7 +599,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_output = (adv_img[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        adv_output = (adv_output * 255.0).astype(np.uint8)
         adv_output = cv2.cvtColor(adv_output, cv2.COLOR_RGB2BGR)
         
         output_path = img1_path.replace('.jpg', '_spsa_adv.jpg')
@@ -707,7 +708,7 @@ class FacenetAttackFramework:
                 break
         # Convert to image and save
         adv_output = (x_adv[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().numpy()
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        adv_output = (adv_output * 255.0).astype(np.uint8)
         adv_output = cv2.cvtColor(adv_output, cv2.COLOR_RGB2BGR)
         
         output_path = img1_path.replace('.jpg', '_square_adv.jpg')
@@ -745,17 +746,13 @@ class FacenetAttackFramework:
                 if label == 1:
                     if prediction: 
                         results['true_positive'] += 1
-                        print(f"\nTrue Positive: {img1_path} - {img2_path}")
                     else: 
                         results['false_negative'] += 1
-                        print(f"\nFalse Negative: {img1_path} - {img2_path}")
                 else:
                     if prediction: 
                         results['false_positive'] += 1
-                        print(f"\nFalse Positive: {img1_path} - {img2_path}")
                     else: 
                         results['true_negative'] += 1
-                        print(f"\nTrue Negative: {img1_path} - {img2_path}")
                 
                 # Clean up
                 if os.path.exists(adv_img_path):
@@ -778,7 +775,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in []:
+        for attack_type in ["FGSM","MIFGSM","BIM","PGD"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
 
@@ -806,10 +803,11 @@ class FacenetAttackFramework:
 
 
 if __name__ == "__main__":
+    
     framework = FacenetAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
     )
-    """
+
     results = framework.run_evaluation()
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")
@@ -835,7 +833,7 @@ if __name__ == "__main__":
     }
     
     # Select one attack to debug
-    attack_name = "BIM"  # Change this to debug different attacks
+    attack_name = "Square"  # Change this to debug different attacks
     attack_func = attacks[attack_name]
     
     # Generate the adversarial example
@@ -922,3 +920,4 @@ if __name__ == "__main__":
     plt.show()
     
     print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
+    """

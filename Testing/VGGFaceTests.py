@@ -192,7 +192,7 @@ class VGGAttackFramework:
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() - alpha * grad.sign()  # Note the minus sign
+            perturbed_image = perturbed_image.detach() + alpha * grad.sign()  # Note the minus sign
             
             # Project back to epsilon ball and valid image range
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
@@ -264,7 +264,7 @@ class VGGAttackFramework:
             adv_img = adv_img.detach()
             
             # Update adversarial image with sign of gradient (FGSM-like step)
-            adv_img = adv_img - alpha * torch.sign(grad)
+            adv_img = adv_img + alpha * torch.sign(grad)
             a = torch.clamp(ori_img - epsilon, min=0)
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
             c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
@@ -345,7 +345,7 @@ class VGGAttackFramework:
             # Update momentum term
             grad = grad + momentum * decay_factor
             momentum = grad            
-            adv_img = adv_img - alpha * grad.sign()
+            adv_img = adv_img + alpha * grad.sign()
             
             delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta
@@ -724,7 +724,7 @@ class VGGAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM","PGD","BIM","MIFGSM","Square","SPSA","CW"]:
+        for attack_type in ["FGSM","PGD","BIM","MIFGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
