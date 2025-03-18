@@ -47,8 +47,7 @@ class FacenetAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-
-    def verify_pair(self, img1_path, img2_path, threshold=1.2):
+    def verify_pair(self, img1_path, img2_path, threshold=0.9):
         # Read and preprocess images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -57,8 +56,8 @@ class FacenetAttackFramework:
         img2 = cv2.resize(img2, (224, 224))
         
         # Convert to torch tensor and normalize
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224) /255
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224) /255
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255
         # Move to device
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -68,9 +67,10 @@ class FacenetAttackFramework:
             # Forward pass until fc7 for both images
             feat1 = self.model.forward(img1)
             feat2 = self.model.forward(img2)
+            feat1 = F.normalize(feat1, p=2, dim=1)
+            feat2 = F.normalize(feat2, p=2, dim=1)
             # Compute L2 distance
             l2_distance = torch.norm(feat1 - feat2, p=2).item()
-            print(l2_distance)
             return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
@@ -79,8 +79,8 @@ class FacenetAttackFramework:
         img1 = cv2.resize(img1, (224, 224))
         img2 = cv2.resize(img2, (224, 224))
 
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255.0
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255.0
 
 
         img1 = img1.to(self.device)
@@ -91,7 +91,9 @@ class FacenetAttackFramework:
     
         self.model.eval()
         feat1 = self.model.forward(img1_adv)
-        feat2 = self.model.forward(img2)       
+        feat2 = self.model.forward(img2)
+        feat1 = F.normalize(feat1, p=2, dim=1)
+        feat2 = F.normalize(feat2, p=2, dim=1)       
         # Compute L2 distance
         distance = torch.norm(feat1 - feat2, p=2)
         
@@ -668,18 +670,13 @@ class FacenetAttackFramework:
                 if label == 1:
                     if prediction: 
                         results['true_positive'] += 1
-                        print(f"True Positive: {img1_path} - {img2_path}")
                     else: 
                         results['false_negative'] += 1
-                        print(f"False Negative: {img1_path} - {img2_path}")
                 else:
                     if prediction: 
                         results['false_positive'] += 1
-                        print(f"False Positive: {img1_path} - {img2_path}")
                     else: 
-                        results['true_negative'] += 1
-                        print(f"True Negative: {img1_path} - {img2_path}")
-                
+                        results['true_negative'] += 1                
                 # Clean up
                 if os.path.exists(adv_img_path):
                     os.remove(adv_img_path)
@@ -701,7 +698,7 @@ class FacenetAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in []:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance

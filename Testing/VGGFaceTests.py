@@ -8,7 +8,7 @@ import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from Model.Architecture.VGGFaceArchitecture import VGGFace
-
+import matplotlib.pyplot as plt
 
 class VGGAttackFramework:
     def __init__(self, data_dir, model_path, device='cuda'):
@@ -159,7 +159,7 @@ class VGGAttackFramework:
         
         # Add small random noise to start
         perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon, epsilon)
-        perturbed_image = torch.clamp(perturbed_image, 0, 255).detach()
+        perturbed_image = torch.clamp(perturbed_image, min=0, max=1).detach()
         
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
@@ -334,7 +334,6 @@ class VGGAttackFramework:
             else:  # Increase distance (make same person look different)
                 loss = -distance
             
-            # Compute gradients
             grad = torch.autograd.grad(loss, adv_img)[0]
             
             # Detach from computation graph
@@ -351,7 +350,6 @@ class VGGAttackFramework:
             delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta
             adv_img = torch.clamp(adv_img, min=0, max=255)
-        
         # Convert to image and save
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
@@ -583,7 +581,7 @@ class VGGAttackFramework:
         img2 = img2.to(self.device)
 
         # Square attack parameters
-        epsilon = 8/255 * 255  # Convert to [0, 255] scale
+        epsilon = 8/255
         
         # Extract features from target image
         self.model.eval()
@@ -666,9 +664,7 @@ class VGGAttackFramework:
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def evaluate_attack(self, attack_type):
-        """Evaluate attack performance"""
         results = {
             'true_positive': 0, 'true_negative': 0,
             'false_positive': 0, 'false_negative': 0
@@ -679,7 +675,7 @@ class VGGAttackFramework:
                 # Apply attack
                 if attack_type == "FGSM":
                     adv_img_path = self.generateFGSMAttack(img1_path, img2_path, label)
-                elif attack_type == "PGD": # PGD
+                elif attack_type == "PGD": 
                     adv_img_path = self.generatePGDAttack(img1_path, img2_path, label)
                 elif attack_type == "BIM":
                     adv_img_path = self.generateBIMAttack(img1_path, img2_path, label)
@@ -699,17 +695,13 @@ class VGGAttackFramework:
                 if label == 1:
                     if prediction: 
                         results['true_positive'] += 1
-                        print(f"True Positive: {img1_path} - {img2_path}")
                     else: 
                         results['false_negative'] += 1
-                        print(f"False Negative: {img1_path} - {img2_path}")
                 else:
                     if prediction: 
                         results['false_positive'] += 1
-                        print(f"False Positive: {img1_path} - {img2_path}")
                     else: 
                         results['true_negative'] += 1
-                        print(f"True Negative: {img1_path} - {img2_path}")
                 
                 # Clean up
                 if os.path.exists(adv_img_path):
@@ -764,8 +756,117 @@ if __name__ == "__main__":
         model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
-    
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
+
+
+    """
+    if len(framework.pairs) > 0:
+        img1_path, img2_path, label = framework.pairs[50]  # Get the first pair
+        print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
+    else:
+        print("No image pairs found. Please check your dataset path.")
+        sys.exit(1)
+    
+    # Generate adversarial examples using different attack methods
+    attacks = {
+        "FGSM": framework.generateFGSMAttack,
+        "PGD": framework.generatePGDAttack,
+        "BIM": framework.generateBIMAttack,
+        "MIFGSM": framework.generateMIFGSMAttack,
+        "Square": framework.generateSquareAttack,
+        "SPSA": framework.generateSPSAAttack,
+        "CW": framework.generateCWAttack
+    }
+    
+    # Select one attack to debug
+    attack_name = "SPSA"  # Change this to debug different attacks
+    attack_func = attacks[attack_name]
+    
+    # Generate the adversarial example
+    print(f"Generating {attack_name} adversarial example...")
+    adv_img_path = attack_func(img1_path, img2_path, label)
+    print(f"Adversarial example saved to: {adv_img_path}")
+    
+    # Load original images and adversarial image for display
+    img1 = cv2.imread(img1_path)
+    img2 = cv2.imread(img2_path)
+    adv_img = cv2.imread(adv_img_path)
+    
+    # Convert from BGR to RGB for display
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+    adv_img = cv2.cvtColor(adv_img, cv2.COLOR_BGR2RGB)
+    
+    # Resize for uniform display
+    img1 = cv2.resize(img1, (224, 224))
+    img2 = cv2.resize(img2, (224, 224))
+    adv_img = cv2.resize(adv_img, (224, 224))
+    
+    # Create a figure with subplots
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Display the images
+    axes[0].imshow(img1)
+    axes[0].set_title("Original Image")
+    axes[0].axis('off')
+    
+    axes[1].imshow(adv_img)
+    axes[1].set_title(f"{attack_name} Adversarial")
+    axes[1].axis('off')
+    
+    axes[2].imshow(img2)
+    axes[2].set_title("Target Image")
+    axes[2].axis('off')
+    
+    # Calculate and display the verification results
+    # Looking at the original function, verify_pair returns the comparison with a threshold
+    # So the results are already boolean (True for match, False for no match)
+    orig_match = framework.verify_pair(img1_path, img2_path)
+    adv_match = framework.verify_pair(adv_img_path, img2_path)
+    
+    # Define attack success based on the goal
+    # If label=1 (same person): attack success means changing match to no match
+    # If label=0 (different people): attack success means changing no match to match
+    if label == 1:
+        attack_success = orig_match and not adv_match  # Changed from match to no match
+    else:
+        attack_success = not orig_match and adv_match  # Changed from no match to match
+    
+    # Calculate perturbation magnitude
+    perturbation = adv_img.astype(np.float32) - img1.astype(np.float32)
+    l2_norm = np.sqrt(np.sum(perturbation**2))
+    linf_norm = np.max(np.abs(perturbation))
+    
+    # Display results as text
+    result_text = (
+        f"Attack: {attack_name}\n"
+        f"Original pair verification: {'Match' if orig_match else 'No Match'}\n"
+        f"Adversarial pair verification: {'Match' if adv_match else 'No Match'}\n"
+        f"Attack {'successful' if attack_success else 'failed'}\n"
+        f"L2 perturbation: {l2_norm:.2f}\n"
+        f"L∞ perturbation: {linf_norm:.2f}"
+    )
+    
+    plt.figtext(0.5, 0.01, result_text, ha='center', fontsize=12, bbox={"facecolor":"orange", "alpha":0.2, "pad":5})
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.25)  # Make room for the text
+    plt.show()
+    
+    # Also display the perturbation itself (magnified for visibility)
+    plt.figure(figsize=(10, 5))
+    
+    # Normalize perturbation for better visualization
+    perturbation_vis = np.abs(perturbation)
+    perturbation_vis = perturbation_vis / np.max(perturbation_vis) * 255
+    
+    plt.imshow(perturbation_vis.astype(np.uint8))
+    plt.title(f"Perturbation Map ({attack_name})")
+    plt.colorbar(label="Magnitude")
+    plt.show()
+    
+    print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
+    """
