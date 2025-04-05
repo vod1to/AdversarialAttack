@@ -5,18 +5,15 @@ import cv2
 from tqdm import tqdm
 import os,sys
 import torch.nn as nn
-from facenet_pytorch import MTCNN, InceptionResnetV1
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-from PIL import Image
+from facenet_pytorch import InceptionResnetV1
 import matplotlib.pyplot as plt
+
 
 class FacenetAttackFramework:
     def __init__(self, data_dir, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
-
         # Initialize model
         self.model = InceptionResnetV1(pretrained="vggface2").eval()
         self.model = self.model.to(self.device)
@@ -35,8 +32,7 @@ class FacenetAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 5:
-                break
+
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -45,8 +41,7 @@ class FacenetAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 10:
-                break
+
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=1.1):
         # Preprocess images using MTCNN
@@ -80,7 +75,6 @@ class FacenetAttackFramework:
         emb1 = self.model(img1)
         emb2 = self.model(img2)
         l2_distance = torch.norm(emb1 - emb2, p=2).item()
-        print(l2_distance)
         return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label=None):
         # Load images with OpenCV
@@ -554,10 +548,10 @@ class FacenetAttackFramework:
 
         # SPSA parameters
         epsilon = 8/255        # Total perturbation constraint
-        nb_iter = 100          # Number of attack iterations
+        nb_iter = 20          # Number of attack iterations
         lr = 0.01              # Learning rate for optimization
         delta = 0.01           # Perturbation size for gradient estimation
-        nb_sample = 16         # Number of samples for gradient estimation
+        nb_sample = 8         # Number of samples for gradient estimation
         
         # Extract features from target image
         self.model.eval()
@@ -678,13 +672,11 @@ class FacenetAttackFramework:
                 feat = self.model(x)
                 distance = torch.norm(feat - feat2, p=2)
                 return distance.item()
-
-        # Determine the best distance based on the attack goal
-        if label == 1:  # Make different people look same (minimize distance)
-            best_distance = compute_distance(x_adv)
-            is_better = lambda new_dist, curr_dist: new_dist < curr_dist
-        else:  # Make same person look different (maximize distance)
+        if label == 1: 
             best_distance = -compute_distance(x_adv)
+            is_better = lambda new_dist, curr_dist: new_dist < curr_dist
+        else:  
+            best_distance = compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist > curr_dist
 
         # Reshape image for easier manipulation
@@ -719,12 +711,10 @@ class FacenetAttackFramework:
             else:  # Apply to specific channel
                 x_new[0, channel, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
                     img1[0, channel, h_start:h_start+s, w_start:w_start+s] + noise.squeeze(1), -1, 1)
-
-            # Calculate new distance
-            if label == 1:  # Minimize distance
-                new_distance = compute_distance(x_new)
-            else:  # Maximize distance
+            if label == 1:  
                 new_distance = -compute_distance(x_new)
+            else: 
+                new_distance = compute_distance(x_new)
 
             # Update best adversarial example if the perturbation improves it
             if is_better(new_distance, best_distance):
@@ -803,7 +793,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["SPSA"]:
+        for attack_type in ["FGSM","BIM","MIFGSM","PGD"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
 
