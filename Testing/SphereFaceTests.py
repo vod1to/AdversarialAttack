@@ -4,32 +4,29 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 import os,sys
+import torch
+from PIL import Image
+import torchvision.transforms as transforms
+import torch.nn.functional as F
 import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-from Model.Architecture.OpenFaceArchitecture import netOpenFace
+from Model.Architecture.SphereFaceArchitecture import sphere20a
 import matplotlib.pyplot as plt
+import torch
+import cv2
+import numpy as np
 from torch.autograd import Variable
-
-class OpenFaceAttackFramework:
-    def __init__(self, data_dir, device='cuda'):
+class SphereAttackFramework:
+    def __init__(self, data_dir, model_path, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
         
         # Initialize model
-        self.model = netOpenFace(useCuda = True, gpuDevice = 0)
-        self.model.load_state_dict(torch.load("E:/AdversarialAttack-2/Model/Weights/openface.pth"))
-        self.model.eval()
-    def ReadImage(self, pathname):
-        img = cv2.imread(pathname)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
-        img = np.transpose(img, (2, 0, 1))
-        img = img.astype(np.float32) / 255.0
-        I_ = torch.from_numpy(img).unsqueeze(0)
-        I_ = I_.cuda()
-        return I_       
+        self.model = sphere20a().to(self.device)
+        self.model.load_state_dict(torch.load(model_path))
+        self.model.eval()        
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
@@ -57,22 +54,37 @@ class OpenFaceAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-    def verify_pair(self, img1_path, img2_path, threshold=0.4):
-        img1 = self.ReadImage(pathname=img1_path)
-        img2 = self.ReadImage(pathname=img2_path)
-        # Combine images into a batch
-        I_ = torch.cat([img1, img2], 0)
-        I_ = Variable(I_, requires_grad=False)
-        # Get embeddings from the model
-        with torch.no_grad():
-            _, features = self.model(I_)
+    def verify_pair(self, img1_path, img2_path, threshold=0.35):
+        # Set the model to evaluation mode
+        self.model.eval()
+        self.model.feature = True
         
-        # Compute cosine similarity
-        cosi = torch.nn.CosineSimilarity(dim=0) 
-        similarity = cosi(features[0],features[1])
-        print(similarity)
-
-        return False
+        # Load and align face images (using your face alignment function)
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        img1 = cv2.resize(img1, (96, 112))
+        img2 = cv2.resize(img2, (96, 112))
+        # Prepare images exactly as in the original code
+        imglist = [img1, cv2.flip(img1, 1), img2, cv2.flip(img2, 1)]
+        for i in range(len(imglist)):
+            imglist[i] = imglist[i].transpose(2, 0, 1).reshape((1, 3, 112, 96))
+            imglist[i] = (imglist[i] - 127.5) / 128.0
+        
+        img = np.vstack(imglist)
+        img = Variable(torch.from_numpy(img).float(), volatile=True).cuda()
+        
+        # Extract features
+        with torch.no_grad():
+            output = self.model(img)
+        
+        f = output.data
+        f1, f2 = f[0], f[2]  # Use the original images (not the flipped versions)
+        
+        # Compute cosine distance as in the original code
+        cosine_similarity = f1.dot(f2) / (f1.norm() * f2.norm() + 1e-5)
+        print(cosine_similarity)
+        # Return verification result and similarity score
+        return cosine_similarity > threshold
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -718,6 +730,7 @@ class OpenFaceAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
+
         for attack_type in []:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
@@ -745,8 +758,9 @@ class OpenFaceAttackFramework:
 
 
 if __name__ == "__main__":
-    framework = OpenFaceAttackFramework(
+    framework = SphereAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
+        model_path='E:/AdversarialAttack-2/Model/Weights/sphere20a_20171020.pth'
     )
     results = framework.run_evaluation()
     for scenario, metrics in results.items():
