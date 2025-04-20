@@ -32,7 +32,8 @@ class FacenetAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-
+            if len(pairs) == 1031:
+                break
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -41,6 +42,9 @@ class FacenetAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
+            if len(pairs) == 2062:
+                break
+            
 
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=1.1):
@@ -506,18 +510,6 @@ class FacenetAttackFramework:
 
         return output_path
     def generateSPSAAttack(self, img1_path, img2_path, label=None):
-        """
-        Generate an adversarial example using SPSA (Simultaneous Perturbation Stochastic Approximation).
-        
-        Args:
-            img1_path (str): Path to the source image to be perturbed
-            img2_path (str): Path to the target image for comparison
-            label (int, optional): Attack goal - 1 to decrease distance (make different people look same),
-                                  None to increase distance (make same person look different)
-        
-        Returns:
-            str: Path to the saved adversarial image
-        """
         # Load images with OpenCV
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -567,8 +559,9 @@ class FacenetAttackFramework:
         
         # Define loss function based on goal
         def compute_loss(perturbed_img):
-            feat = self.model(perturbed_img)
-            distance = torch.norm(feat - feat2, p=2)
+            with torch.no_grad():
+                feat = self.model(perturbed_img)
+                distance = torch.norm(feat - feat2, p=2)
             
             # Define loss based on attack goal
             if label == 1:  # Decrease distance (make different people look same)
@@ -600,6 +593,9 @@ class FacenetAttackFramework:
                 grad_estimate = (loss_pos - loss_neg) / (2 * delta)
                 grad_estimate = grad_estimate * bernoulli
                 grad += grad_estimate
+                del bernoulli, grad_estimate
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             
             # Average gradient over samples
             grad /= nb_sample
@@ -611,13 +607,18 @@ class FacenetAttackFramework:
             optimizer.step()
             
             # Project perturbation to epsilon-ball and ensure valid pixel range
-            dx.data = torch.clamp(dx.data, min=-epsilon, max=epsilon)
-            adv_img = torch.clamp(img1 + dx, -1, 1)
-            dx.data = adv_img - img1
+            with torch.no_grad():
+                dx.data = torch.clamp(dx.data, min=-epsilon, max=epsilon)
+                adv_img = torch.clamp(img1 + dx, -1, 1)
+                dx.data = adv_img - img1
+
+            if (i+1) % 5 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         
         # Get final adversarial image
-        adv_img = img1 + dx
+        with torch.no_grad():
+            adv_img = img1 + dx
         
         # Convert to image and save
         adv_output = (adv_img[0] / 2.0 + 0.5).permute(1, 2, 0).cpu().detach().numpy()
@@ -793,7 +794,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["FGSM","BIM","MIFGSM","PGD"]:
+        for attack_type in ["SPSA"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
 

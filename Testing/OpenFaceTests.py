@@ -7,19 +7,28 @@ import os,sys
 import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-from Model.Architecture.FacenetArchitecture import InceptionResnetV1
+from Model.Architecture.OpenFaceArchitecture import netOpenFace
+import matplotlib.pyplot as plt
 
-
-class FacenetAttackFramework:
-    def __init__(self, data_dir, model_path, device='cuda'):
+class OpenFaceAttackFramework:
+    def __init__(self, data_dir, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
         
         # Initialize model
-        self.model = InceptionResnetV1().to(self.device)
-        self.model.load_state_dict(torch.load(model_path), strict=False)
-        self.model.eval()        
+        self.model = netOpenFace(useCuda = True, gpuDevice = 0)
+        self.model.load_state_dict(torch.load("E:/AdversarialAttack-2/Model/Weights/openface.pth"))
+        self.model.eval()
+    def ReadImage(self, pathname):
+        img = cv2.imread(pathname)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
+        img = np.transpose(img, (2, 0, 1))
+        img = img.astype(np.float32) / 255.0
+        I_ = torch.from_numpy(img).unsqueeze(0)
+        I_ = I_.cuda()
+        return I_       
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
@@ -47,31 +56,28 @@ class FacenetAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-    def verify_pair(self, img1_path, img2_path, threshold=0.9):
-        # Read and preprocess images
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def cosine_similarity(self, feat1, feat2):
+        # Compute cosine similarity between two feature vectors
+        return torch.nn.functional.cosine_similarity(feat1, feat2, dim=0)
+    def verify_pair(self, img1_path, img2_path, threshold=0.7):
+        img1 = self.ReadImage(pathname=img1_path)
+        img2 = self.ReadImage(pathname=img2_path)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
+        # Combine images into a batch
+        I_ = torch.cat([img1, img2], 0)
         
-        # Convert to torch tensor and normalize
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255
-        # Move to device
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-        
-        self.model.eval()      
+        # Get embeddings from the model
         with torch.no_grad():
-            # Forward pass until fc7 for both images
-            feat1 = self.model.forward(img1)
-            feat2 = self.model.forward(img2)
-            feat1 = F.normalize(feat1, p=2, dim=1)
-            feat2 = F.normalize(feat2, p=2, dim=1)
-            # Compute L2 distance
-            l2_distance = torch.norm(feat1 - feat2, p=2).item()
-            return l2_distance < threshold
+            _, features = self.model(I_)
+        
+        # Compute cosine similarity
+        similarity = self.cosine_similarity(features[0], features[1])
+        
+        distance = 1.0 - similarity.item()
+        is_same_person = distance < threshold
+
+        print(distance)
+        return is_same_person
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -79,9 +85,12 @@ class FacenetAttackFramework:
         img1 = cv2.resize(img1, (224, 224))
         img2 = cv2.resize(img2, (224, 224))
 
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255.0
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224) / 255.0
+        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
+        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -90,10 +99,13 @@ class FacenetAttackFramework:
         epsilon = 8/255  # Attack strength parameter
     
         self.model.eval()
-        feat1 = self.model.forward(img1_adv)
-        feat2 = self.model.forward(img2)
+        feat1 = self.model.get_features(img1_adv)
+        feat2 = self.model.get_features(img2)
+    
+        # Normalize features
         feat1 = F.normalize(feat1, p=2, dim=1)
-        feat2 = F.normalize(feat2, p=2, dim=1)       
+        feat2 = F.normalize(feat2, p=2, dim=1)
+        
         # Compute L2 distance
         distance = torch.norm(feat1 - feat2, p=2)
         
@@ -113,6 +125,7 @@ class FacenetAttackFramework:
         
         # Convert back to image format and save
         adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
+        adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
         adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
         
         # Save the adversarial example
@@ -130,7 +143,9 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -144,10 +159,10 @@ class FacenetAttackFramework:
         
         # Add small random noise to start
         perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon, epsilon)
-        perturbed_image = torch.clamp(perturbed_image, 0, 255).detach()
+        perturbed_image = torch.clamp(perturbed_image, min=0, max=1).detach()
         
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
 
 
@@ -157,7 +172,7 @@ class FacenetAttackFramework:
             perturbed_image.requires_grad = True
             
             # Forward pass to get features
-            feat1 = self.model.forward(perturbed_image)
+            feat1 = self.model.get_features(perturbed_image)
             
             # Normalize features
             feat1 = F.normalize(feat1, p=2, dim=1)
@@ -177,7 +192,7 @@ class FacenetAttackFramework:
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() - alpha * grad.sign()  # Note the minus sign
+            perturbed_image = perturbed_image.detach() + alpha * grad.sign()  # Note the minus sign
             
             # Project back to epsilon ball and valid image range
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
@@ -185,6 +200,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_img = perturbed_image[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_img += np.array([129.1863, 104.7624, 93.5940])
         adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
         
         output_path = img1_path.replace('.jpg', '_pgd_adv.jpg')
@@ -201,7 +217,9 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -214,7 +232,7 @@ class FacenetAttackFramework:
         # Extract features from target image
         self.model.eval()
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Initialize adversarial example with the original image
@@ -227,7 +245,7 @@ class FacenetAttackFramework:
             adv_img.requires_grad = True
             
             # Forward pass to get features
-            feat1 = self.model.forward(adv_img)
+            feat1 = self.model.get_features(adv_img)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
             # Compute distance between feature vectors
@@ -246,7 +264,7 @@ class FacenetAttackFramework:
             adv_img = adv_img.detach()
             
             # Update adversarial image with sign of gradient (FGSM-like step)
-            adv_img = adv_img - alpha * torch.sign(grad)
+            adv_img = adv_img + alpha * torch.sign(grad)
             a = torch.clamp(ori_img - epsilon, min=0)
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
             c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
@@ -256,13 +274,13 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
         output_path = img1_path.replace('.jpg', '_bim_adv.jpg')
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def generateMIFGSMAttack(self, img1_path, img2_path, label=None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -273,7 +291,9 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -287,7 +307,7 @@ class FacenetAttackFramework:
         # Extract features from target image
         self.model.eval()
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Initialize adversarial example with the original image
@@ -302,7 +322,7 @@ class FacenetAttackFramework:
             adv_img.requires_grad = True
             
             # Forward pass to get features
-            feat1 = self.model.forward(adv_img)
+            feat1 = self.model.get_features(adv_img)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
             # Compute distance between feature vectors
@@ -314,7 +334,6 @@ class FacenetAttackFramework:
             else:  # Increase distance (make same person look different)
                 loss = -distance
             
-            # Compute gradients
             grad = torch.autograd.grad(loss, adv_img)[0]
             
             # Detach from computation graph
@@ -326,14 +345,14 @@ class FacenetAttackFramework:
             # Update momentum term
             grad = grad + momentum * decay_factor
             momentum = grad            
-            adv_img = adv_img - alpha * grad.sign()
+            adv_img = adv_img + alpha * grad.sign()
             
             delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta
             adv_img = torch.clamp(adv_img, min=0, max=255)
-        
         # Convert to image and save
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
         output_path = img1_path.replace('.jpg', '_mifgsm_adv.jpg')
@@ -350,7 +369,9 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -363,8 +384,7 @@ class FacenetAttackFramework:
             return 0.5 * (torch.tanh(x) + 1)
         
         def inverse_tanh_space(x):
-            # Inverse of tanh_space in the range [0, 1]
-            return 0.5 * torch.log((1 + x*2 - 1) / (1 - (x*2 - 1)))
+            return torch.atanh(torch.clamp(x * 2 - 1, min=-1, max=1))
         
         # Initialize w in the inverse tanh space
         w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
@@ -380,7 +400,7 @@ class FacenetAttackFramework:
         
         # Extract features from target image
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Prepare loss functions
@@ -398,7 +418,7 @@ class FacenetAttackFramework:
             L2_loss = current_L2.sum()
             
             # Get features of adversarial image
-            feat1 = self.model.forward(adv_images)
+            feat1 = self.model.get_features(adv_images)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
             # Calculate feature distance
@@ -446,11 +466,12 @@ class FacenetAttackFramework:
         
         # Add mean back to final result
         adv_output = best_adv_images[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
 
         adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=255.0, neginf=0.0)
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
-        output_path = img1_path.replace('.jpg', '_cw_torchattacks_adv.jpg')
+        output_path = img1_path.replace('.jpg', '_cw_adv.jpg')
         cv2.imwrite(output_path, adv_output)
         
         return output_path
@@ -464,7 +485,9 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
@@ -478,7 +501,7 @@ class FacenetAttackFramework:
         # Extract features from target image
         self.model.eval()
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Initialize adversarial example with the original image
@@ -487,7 +510,7 @@ class FacenetAttackFramework:
         # Function to compute loss based on goal
         def compute_loss(perturbed_img):
             with torch.no_grad():
-                feat = self.model.forward(perturbed_img)
+                feat = self.model.get_features(perturbed_img)
                 feat = F.normalize(feat, p=2, dim=1)
                 distance = torch.norm(feat - feat2, p=2)
                 
@@ -534,6 +557,7 @@ class FacenetAttackFramework:
         
         # Convert to image and save
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
         output_path = img1_path.replace('.jpg', '_spsa_adv.jpg')
@@ -549,18 +573,20 @@ class FacenetAttackFramework:
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
 
-
+        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
+        img1 -= mean
+        img2 -= mean
 
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
         # Square attack parameters
-        epsilon = 8/255 * 255  # Convert to [0, 255] scale
+        epsilon = 8/255
         
         # Extract features from target image
         self.model.eval()
         with torch.no_grad():
-            feat2 = self.model.forward(img2)
+            feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Initialize adversarial example with the original image
@@ -569,7 +595,7 @@ class FacenetAttackFramework:
         # Function to evaluate distance
         def compute_distance(x):
             with torch.no_grad():
-                feat = self.model.forward(x)
+                feat = self.model.get_features(x)
                 feat = F.normalize(feat, p=2, dim=1)
                 distance = torch.norm(feat - feat2, p=2)
                 return distance.item()
@@ -631,15 +657,14 @@ class FacenetAttackFramework:
                 break
         # Convert to image and save
         adv_output = x_adv[0].permute(1, 2, 0).contiguous().cpu().numpy()
+        adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
         output_path = img1_path.replace('.jpg', '_square_adv.jpg')
         cv2.imwrite(output_path, adv_output)
         
         return output_path
-
     def evaluate_attack(self, attack_type):
-        """Evaluate attack performance"""
         results = {
             'true_positive': 0, 'true_negative': 0,
             'false_positive': 0, 'false_negative': 0
@@ -650,7 +675,7 @@ class FacenetAttackFramework:
                 # Apply attack
                 if attack_type == "FGSM":
                     adv_img_path = self.generateFGSMAttack(img1_path, img2_path, label)
-                elif attack_type == "PGD": # PGD
+                elif attack_type == "PGD": 
                     adv_img_path = self.generatePGDAttack(img1_path, img2_path, label)
                 elif attack_type == "BIM":
                     adv_img_path = self.generateBIMAttack(img1_path, img2_path, label)
@@ -676,7 +701,8 @@ class FacenetAttackFramework:
                     if prediction: 
                         results['false_positive'] += 1
                     else: 
-                        results['true_negative'] += 1                
+                        results['true_negative'] += 1
+                
                 # Clean up
                 if os.path.exists(adv_img_path):
                     os.remove(adv_img_path)
@@ -697,8 +723,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-
-        for attack_type in ["FGSM"]:
+        for attack_type in []:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -725,13 +750,121 @@ class FacenetAttackFramework:
 
 
 if __name__ == "__main__":
-    framework = FacenetAttackFramework(
+    framework = OpenFaceAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_path='E:/AdversarialAttack-2/Model/Weights/Facenet.pt'
     )
     results = framework.run_evaluation()
-    
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
+
+
+    """
+    if len(framework.pairs) > 0:
+        img1_path, img2_path, label = framework.pairs[50]  # Get the first pair
+        print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
+    else:
+        print("No image pairs found. Please check your dataset path.")
+        sys.exit(1)
+    
+    # Generate adversarial examples using different attack methods
+    attacks = {
+        "FGSM": framework.generateFGSMAttack,
+        "PGD": framework.generatePGDAttack,
+        "BIM": framework.generateBIMAttack,
+        "MIFGSM": framework.generateMIFGSMAttack,
+        "Square": framework.generateSquareAttack,
+        "SPSA": framework.generateSPSAAttack,
+        "CW": framework.generateCWAttack
+    }
+    
+    # Select one attack to debug
+    attack_name = "SPSA"  # Change this to debug different attacks
+    attack_func = attacks[attack_name]
+    
+    # Generate the adversarial example
+    print(f"Generating {attack_name} adversarial example...")
+    adv_img_path = attack_func(img1_path, img2_path, label)
+    print(f"Adversarial example saved to: {adv_img_path}")
+    
+    # Load original images and adversarial image for display
+    img1 = cv2.imread(img1_path)
+    img2 = cv2.imread(img2_path)
+    adv_img = cv2.imread(adv_img_path)
+    
+    # Convert from BGR to RGB for display
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+    adv_img = cv2.cvtColor(adv_img, cv2.COLOR_BGR2RGB)
+    
+    # Resize for uniform display
+    img1 = cv2.resize(img1, (224, 224))
+    img2 = cv2.resize(img2, (224, 224))
+    adv_img = cv2.resize(adv_img, (224, 224))
+    
+    # Create a figure with subplots
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Display the images
+    axes[0].imshow(img1)
+    axes[0].set_title("Original Image")
+    axes[0].axis('off')
+    
+    axes[1].imshow(adv_img)
+    axes[1].set_title(f"{attack_name} Adversarial")
+    axes[1].axis('off')
+    
+    axes[2].imshow(img2)
+    axes[2].set_title("Target Image")
+    axes[2].axis('off')
+    
+    # Calculate and display the verification results
+    # Looking at the original function, verify_pair returns the comparison with a threshold
+    # So the results are already boolean (True for match, False for no match)
+    orig_match = framework.verify_pair(img1_path, img2_path)
+    adv_match = framework.verify_pair(adv_img_path, img2_path)
+    
+    # Define attack success based on the goal
+    # If label=1 (same person): attack success means changing match to no match
+    # If label=0 (different people): attack success means changing no match to match
+    if label == 1:
+        attack_success = orig_match and not adv_match  # Changed from match to no match
+    else:
+        attack_success = not orig_match and adv_match  # Changed from no match to match
+    
+    # Calculate perturbation magnitude
+    perturbation = adv_img.astype(np.float32) - img1.astype(np.float32)
+    l2_norm = np.sqrt(np.sum(perturbation**2))
+    linf_norm = np.max(np.abs(perturbation))
+    
+    # Display results as text
+    result_text = (
+        f"Attack: {attack_name}\n"
+        f"Original pair verification: {'Match' if orig_match else 'No Match'}\n"
+        f"Adversarial pair verification: {'Match' if adv_match else 'No Match'}\n"
+        f"Attack {'successful' if attack_success else 'failed'}\n"
+        f"L2 perturbation: {l2_norm:.2f}\n"
+        f"L∞ perturbation: {linf_norm:.2f}"
+    )
+    
+    plt.figtext(0.5, 0.01, result_text, ha='center', fontsize=12, bbox={"facecolor":"orange", "alpha":0.2, "pad":5})
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.25)  # Make room for the text
+    plt.show()
+    
+    # Also display the perturbation itself (magnified for visibility)
+    plt.figure(figsize=(10, 5))
+    
+    # Normalize perturbation for better visualization
+    perturbation_vis = np.abs(perturbation)
+    perturbation_vis = perturbation_vis / np.max(perturbation_vis) * 255
+    
+    plt.imshow(perturbation_vis.astype(np.uint8))
+    plt.title(f"Perturbation Map ({attack_name})")
+    plt.colorbar(label="Magnitude")
+    plt.show()
+    
+    print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
+    """
