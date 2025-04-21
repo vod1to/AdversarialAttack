@@ -1,0 +1,25 @@
+import os
+
+def delete_fgsm_adversarial_files(base_dir):
+    # Walk through all directories and files
+    count = 0
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            # Check if the file ends with _fgsm_adv.jpg
+            if file.endswith("_fgsm_adv.jpg"):
+                file_path = os.path.join(root, file)
+                try:
+                    os.remove(file_path)
+                    count += 1
+                    print(f"Deleted: {file_path}")
+                except Exception as e:
+                    print(f"Error deleting {file_path}: {e}")
+    
+    print(f"Total files deleted: {count}")
+
+# Set the base directory to your LFW dataset directory
+# Adjust this path to match your dataset location
+base_dir = 'E:/lfw/lfw-py/lfw_funneled'  # Replace with your actual path
+
+# Run the deletion function
+delete_fgsm_adversarial_files(base_dir)

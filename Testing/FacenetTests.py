@@ -32,7 +32,7 @@ class FacenetAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 1031:
+            if len(pairs) == 50:
                 break
         # Different person pairs
         for i in range(len(classes)):
@@ -42,7 +42,7 @@ class FacenetAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 2062:
+            if len(pairs) == 100:
                 break
             
 
@@ -794,7 +794,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["SPSA"]:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
 

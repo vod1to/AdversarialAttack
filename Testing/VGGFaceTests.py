@@ -109,10 +109,9 @@ class VGGAttackFramework:
         # Compute L2 distance
         distance = torch.norm(feat1 - feat2, p=2)
         
-        # Define loss based on attack goal
-        if label == 1:  # We want to decrease distance (make different people look same)
+        if label == 1:  
             loss = distance
-        else:  # We want to increase distance (make same person look different)
+        else:  
             loss = -distance
         
 
@@ -180,19 +179,16 @@ class VGGAttackFramework:
             # Compute L2 distance
             distance = torch.norm(feat1 - feat2, p=2)
             
-            # Define loss based on attack goal
-            if label == 1:  # We want to decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # We want to increase distance (make same person look different)
+            else:  
                 loss = -distance
-            
-
             
             # Take gradient step
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() + alpha * grad.sign()  # Note the minus sign
+            perturbed_image = perturbed_image.detach() + alpha * grad.sign() 
             
             # Project back to epsilon ball and valid image range
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
@@ -251,10 +247,9 @@ class VGGAttackFramework:
             # Compute distance between feature vectors
             distance = torch.norm(feat1 - feat2, p=2)
             
-            # Define loss based on attack goal
-            if label == 1:  # Decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # Increase distance (make same person look different)
+            else:  
                 loss = -distance
             
             # Compute gradients
@@ -263,7 +258,6 @@ class VGGAttackFramework:
             # Detach from computation graph
             adv_img = adv_img.detach()
             
-            # Update adversarial image with sign of gradient (FGSM-like step)
             adv_img = adv_img + alpha * torch.sign(grad)
             a = torch.clamp(ori_img - epsilon, min=0)
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
@@ -329,9 +323,9 @@ class VGGAttackFramework:
             distance = torch.norm(feat1 - feat2, p=2)
             
             # Define loss based on attack goal
-            if label == 1:  # Decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # Increase distance (make same person look different)
+            else:  
                 loss = -distance
             
             grad = torch.autograd.grad(loss, adv_img)[0]
@@ -426,13 +420,9 @@ class VGGAttackFramework:
             threshold = 1.0
 
             
-            # Adapt f-function from torchattacks for our face recognition task
-            if label == 1:  # Decrease distance (make different people look same)
-                # We want distance to be minimized, so penalize if it's large
+            if label == 1: 
                 f_loss = torch.clamp(distance - kappa, min=0).sum()
-            else:  # Increase distance (make same person look different)
-                # We want distance to be maximized, so penalize if it's small
-                # Assuming a threshold of 1.0 for simplicity
+            else:  
                 f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
             
             # Total cost
@@ -443,11 +433,10 @@ class VGGAttackFramework:
             cost.backward()
             optimizer.step()
             
-            # Update best adversarial images
-            # For face recognition, success condition is based on distance threshold
-            if label == 1:  # We want small distance
+
+            if label == 1:  
                 condition = (distance < threshold).float()
-            else:  # We want large distance
+            else: 
                 condition = (distance > threshold).float()
             
             # Filter out images that either don't meet the condition or have larger L2
@@ -514,10 +503,9 @@ class VGGAttackFramework:
                 feat = F.normalize(feat, p=2, dim=1)
                 distance = torch.norm(feat - feat2, p=2)
                 
-                # Define loss based on attack goal
-                if label == 1:  # Decrease distance (make different people look same)
+                if label == 1:  
                     return distance
-                else:  # Increase distance (make same person look different)
+                else:  
                     return -distance
         
         # SPSA attack loop
@@ -539,9 +527,9 @@ class VGGAttackFramework:
             
             # Update the adversarial example in the direction of the estimated gradient
             # Note the sign: We use minus for gradient descent direction
-            if label == 1:  # Minimize distance
+            if label == 1: 
                 update_direction = -1
-            else:  # Maximize distance
+            else:  
                 update_direction = 1
                 
             # Apply estimated gradient to update the adversarial example
@@ -601,10 +589,10 @@ class VGGAttackFramework:
                 return distance.item()
         
         # Determine the best distance based on the attack goal
-        if label == 1:  # Make different people look same (minimize distance)
+        if label == 1:  
             best_distance = compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist < curr_dist
-        else:  # Make same person look different (maximize distance)
+        else:  
             best_distance = -compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist > curr_dist
         
@@ -724,7 +712,7 @@ class VGGAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM","PGD","BIM","MIFGSM"]:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance

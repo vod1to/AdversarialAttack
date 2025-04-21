@@ -17,6 +17,7 @@ import torch
 import cv2
 import numpy as np
 from torch.autograd import Variable
+from sphereUtils.matlab_cp2tform import get_similarity_transform_for_cv2
 class SphereAttackFramework:
     def __init__(self, data_dir, model_path, device='cuda'):
         self.data_dir = data_dir
@@ -26,12 +27,29 @@ class SphereAttackFramework:
         # Initialize model
         self.model = sphere20a().to(self.device)
         self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()        
+        self.model.eval()
+        self.landmark = {}
+        with open('Model/lfw_landmark/lfw_landmark.txt') as f:
+            landmark_lines = f.readlines()
+        for line in landmark_lines:
+            l = line.replace('\n','').split('\t')
+            self.landmark[l[0]] = [int(k) for k in l[1:]]
+    def alignment(self,src_img,src_pts):
+        ref_pts = [ [30.2946, 51.6963],[65.5318, 51.5014],
+            [48.0252, 71.7366],[33.5493, 92.3655],[62.7299, 92.2041] ]
+        crop_size = (96, 112)
+        src_pts = np.array(src_pts).reshape(5,2)
+
+        s = np.array(src_pts).astype(np.float32)
+        r = np.array(ref_pts).astype(np.float32)
+
+        tfm = get_similarity_transform_for_cv2(s, r)
+        face_img = cv2.warpAffine(src_img, tfm, crop_size)
+        return face_img
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
                   if os.path.isdir(os.path.join(self.data_dir, d))]
-        
         # Same person pairs
         for person in classes:
             person_dir = os.path.join(self.data_dir, person)
@@ -40,9 +58,8 @@ class SphereAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
+            if len(pairs) ==50:
                 break
-        
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -51,93 +68,122 @@ class SphereAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 100:
+            if len(pairs) ==100:
                 break
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=0.35):
-        # Set the model to evaluation mode
-        self.model.eval()
-        self.model.feature = True
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        # Load and align face images (using your face alignment function)
+        person1 = img1_parts[-2]  # Get the person's name (folder name)
+        person2 = img2_parts[-2]
+        
+        file1 = img1_parts[-1]    # Get the filename
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys in format "person/person_0001.jpg"
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
-        img1 = cv2.resize(img1, (96, 112))
-        img2 = cv2.resize(img2, (96, 112))
-        # Prepare images exactly as in the original code
+        
+        try:
+            img1 = self.alignment(img1, self.landmark[landmark_key1])
+            img2 = self.alignment(img2, self.landmark[landmark_key2])
+        except KeyError:
+            img1 = cv2.resize(img1, (96, 112))
+            img2 = cv2.resize(img2, (96, 112))
+        
+        # Rest of your code remains the same
         imglist = [img1, cv2.flip(img1, 1), img2, cv2.flip(img2, 1)]
         for i in range(len(imglist)):
             imglist[i] = imglist[i].transpose(2, 0, 1).reshape((1, 3, 112, 96))
             imglist[i] = (imglist[i] - 127.5) / 128.0
         
         img = np.vstack(imglist)
-        img = Variable(torch.from_numpy(img).float(), volatile=True).cuda()
-        
+                
         # Extract features
         with torch.no_grad():
-            output = self.model(img)
-        
-        f = output.data
-        f1, f2 = f[0], f[2]  # Use the original images (not the flipped versions)
-        
-        # Compute cosine distance as in the original code
-        cosine_similarity = f1.dot(f2) / (f1.norm() * f2.norm() + 1e-5)
-        print(cosine_similarity)
-        # Return verification result and similarity score
+            img = Variable(torch.from_numpy(img).float()).to(self.device)
+            f,_ = self.model(img)
+
+        f1,f2 = f[0],f[2]
+        cosine_similarity = f1.dot(f2)/(f1.norm()*f2.norm()+1e-5)
+        # Compute cosine similarity
         return cosine_similarity > threshold
-    def generateFGSMAttack(self, img1_path, img2_path, label = None):
-        img1 = cv2.imread(img1_path)
+    def generateFGSMAttack(self, img1_path, img2_path, label=None):
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
+        
+        person1 = img1_parts[-2]  # Get the person's name (folder name)
+        person2 = img2_parts[-2]
+        
+        file1 = img1_parts[-1]    # Get the filename
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys in format "person/person_0001.jpg"
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load images
+        img1_orig = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
+
+        # Try to get landmarks and apply alignment
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2, self.landmark[landmark_key2])
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        img1_adv = img1.clone().detach().requires_grad_(True)
-        epsilon = 8/255  # Attack strength parameter
-    
-        self.model.eval()
-        feat1 = self.model.get_features(img1_adv)
-        feat2 = self.model.get_features(img2)
-    
-        # Normalize features
-        feat1 = F.normalize(feat1, p=2, dim=1)
-        feat2 = F.normalize(feat2, p=2, dim=1)
+        # Process images for feature extraction
+        imglist = [img1, cv2.flip(img1, 1), img2, cv2.flip(img2, 1)]
+        for i in range(len(imglist)):
+            imglist[i] = imglist[i].transpose(2, 0, 1).reshape((1, 3, 112, 96))
+            imglist[i] = (imglist[i] - 127.5) / 128.0
         
-        # Compute L2 distance
-        distance = torch.norm(feat1 - feat2, p=2)
+        img = np.vstack(imglist)
         
-        # Define loss based on attack goal
-        if label == 1:  # We want to decrease distance (make different people look same)
-            loss = distance
-        else:  # We want to increase distance (make same person look different)
-            loss = -distance
+        # Create adversarial version of the first image that requires gradients
+        img1_processed = img1.transpose(2, 0, 1).reshape((1, 3, 112, 96))
+        img1_processed = (img1_processed - 127.5) / 128.0
+        img1_adv = torch.from_numpy(img1_processed).float().to(self.device).requires_grad_(True)
         
+        # Extract features for similarity calculation
+        with torch.no_grad():
+            img_tensor = torch.from_numpy(img).float().to(self.device)
+            f, _ = self.model(img_tensor)
+        
+        f1, f2 = f[0], f[2]
+        
+        # Now run the model on the adversarial image to compute gradients
+        f_adv, _ = self.model(img1_adv)
+        cosine_similarity = torch.dot(f_adv[0], f2)/(torch.norm(f_adv[0])*torch.norm(f2)+1e-5)
 
+        if label == 1:  
+            cosine_similarity = torch.dot(f_adv[0], f2)/(torch.norm(f_adv[0])*torch.norm(f2)+1e-5)
+            loss = -cosine_similarity  
+        else:  
+            cosine_similarity = torch.dot(f_adv[0], f2)/(torch.norm(f_adv[0])*torch.norm(f2)+1e-5)
+            loss = cosine_similarity  
+        
+        # Calculate gradient
         grad_sign = torch.autograd.grad(loss, img1_adv)[0]
-        # Apply perturbation
-        perturbed_image = img1 + epsilon * grad_sign.sign()
-        # Clamp to ensure valid pixel range
-        perturbed_image = torch.clamp(perturbed_image, 0, 255)
-            
+
         
-        # Convert back to image format and save
-        adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
-        adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
-        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        epsilon = 8/255  # Attack strength parameter
+        
+        # Apply perturbation in the normalized space
+        perturbed_image = img1_adv.detach() + epsilon * grad_sign
+        perturbed_image = torch.clamp(perturbed_image, -1.0, 1.0)  # Clamp to valid normalized range
+        
+        # Convert back to image format (0-255 range)
+        perturbed_image = perturbed_image[0].permute(1, 2, 0).detach().cpu().numpy()
+        perturbed_image = (perturbed_image * 128.0) + 127.5  # Reverse the normalization
+        perturbed_image = np.clip(perturbed_image, 0, 255).astype(np.uint8)
         
         # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_fgsm_adv.jpg')
-        cv2.imwrite(output_path, adv_img)
+        cv2.imwrite(output_path, perturbed_image)
         
         return output_path
     def generatePGDAttack(self, img1_path, img2_path, label = None):
@@ -731,7 +777,7 @@ class SphereAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in []:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -769,9 +815,8 @@ if __name__ == "__main__":
             print(f"{metric}: {value:.4f}")
 
 
-    """
     if len(framework.pairs) > 0:
-        img1_path, img2_path, label = framework.pairs[50]  # Get the first pair
+        img1_path, img2_path, label = framework.pairs[0]  # Get the first pair
         print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
     else:
         print("No image pairs found. Please check your dataset path.")
@@ -789,7 +834,7 @@ if __name__ == "__main__":
     }
     
     # Select one attack to debug
-    attack_name = "SPSA"  # Change this to debug different attacks
+    attack_name = "FGSM"  # Change this to debug different attacks
     attack_func = attacks[attack_name]
     
     # Generate the adversarial example
@@ -876,4 +921,4 @@ if __name__ == "__main__":
     plt.show()
     
     print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
-    """
+    os.remove(adv_img_path)
