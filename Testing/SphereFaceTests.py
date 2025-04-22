@@ -881,15 +881,13 @@ if __name__ == "__main__":
         data_dir='E:/lfw/lfw-py/lfw_funneled',
         model_path='E:/AdversarialAttack-2/Model/Weights/sphere20a_20171020.pth'
     )
-    img1_path, img2_path, label = framework.pairs[0]
-    print(framework.generateSquareAttack(img1_path , img2_path, label))
-    '''
+
     results = framework.run_evaluation()
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
-    
+    '''
     if len(framework.pairs) > 0:
         img1_path, img2_path, label = framework.pairs[0]  # Get the first pair
         print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
