@@ -58,8 +58,6 @@ class SphereAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) ==50:
-                break
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -68,8 +66,7 @@ class SphereAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) ==100:
-                break
+
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=0.35):
         img1_parts = img1_path.split(os.sep)
@@ -776,7 +773,7 @@ class SphereAttackFramework:
                 best_similarity = new_similarity
                 
             # Early stopping if we've reached a very good solution
-            threshold = 0.5  # Threshold for similarity
+            threshold = 0.35  # Threshold for similarity
             if (label == 1 and best_similarity < threshold) or (label == 0 and best_similarity > threshold):
                 break
         
