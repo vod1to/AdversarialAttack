@@ -58,6 +58,8 @@ class SphereAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
+            if len(pairs) ==50:
+                break
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -66,7 +68,8 @@ class SphereAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-
+            if len(pairs) ==100:
+                break
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=0.35):
         img1_parts = img1_path.split(os.sep)
@@ -79,21 +82,31 @@ class SphereAttackFramework:
         file2 = img2_parts[-1]
         
         # Create landmark keys in format "person/person_0001.jpg"
-        landmark_key1 = f"{person1}/{file1}"
+        is_adv_example = any(suffix in file1 for suffix in ['_fgsm_adv.jpg', '_pgd_adv.jpg', '_bim_adv.jpg', 
+                                                        '_mifgsm_adv.jpg', '_cw_adv.jpg', '_spsa_adv.jpg', 
+                                                        '_square_adv.jpg'])
+        
+        # For adversarial examples, use the original file's landmark info
+        if is_adv_example:
+
+            base_name = '_'.join(file1.split('_')[:-2]) 
+            original_file = base_name + '.jpg'
+            landmark_key1 = f"{person1}/{original_file}"
+            print("FOUND")
+        else:
+            landmark_key1 = f"{person1}/{file1}"
+            
         landmark_key2 = f"{person2}/{file2}"
+        
         
         # Load images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
         
-        try:
-            img1 = self.alignment(img1, self.landmark[landmark_key1])
-            img2 = self.alignment(img2, self.landmark[landmark_key2])
-        except KeyError:
-            img1 = cv2.resize(img1, (96, 112))
-            img2 = cv2.resize(img2, (96, 112))
+        img1 = self.alignment(img1, self.landmark[landmark_key1])
+        img2 = self.alignment(img2, self.landmark[landmark_key2])
+
         
-        # Rest of your code remains the same
         imglist = [img1, cv2.flip(img1, 1), img2, cv2.flip(img2, 1)]
         for i in range(len(imglist)):
             imglist[i] = imglist[i].transpose(2, 0, 1).reshape((1, 3, 112, 96))
@@ -847,7 +860,7 @@ class SphereAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["Square"]:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -878,7 +891,7 @@ if __name__ == "__main__":
         data_dir='E:/lfw/lfw-py/lfw_funneled',
         model_path='E:/AdversarialAttack-2/Model/Weights/sphere20a_20171020.pth'
     )
-
+    
     results = framework.run_evaluation()
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")

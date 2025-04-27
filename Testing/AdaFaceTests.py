@@ -7,20 +7,22 @@ import os,sys
 import torch.nn as nn
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-from Model.Architecture.OpenFaceArchitecture import netOpenFace
+from Model.Architecture import AdaFaceArchitecture
 import matplotlib.pyplot as plt
-from torch.autograd import Variable
 from sphereUtils.matlab_cp2tform import get_similarity_transform_for_cv2
 
-class OpenFaceAttackFramework:
-    def __init__(self, data_dir, device='cuda'):
+class VGGAttackFramework:
+    def __init__(self, data_dir, model_path, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
         
         # Initialize model
-        self.model = netOpenFace(useCuda = True, gpuDevice = 0)
-        self.model.load_state_dict(torch.load("E:/AdversarialAttack-2/Model/Weights/openface.pth"))
+        adaface_models = {'ir_50':"E:/AdversarialAttack-2/Model/Weights/adaface_ir50_ms1mv2.ckpt",}
+        self.model = AdaFaceArchitecture.build_model("ir_50")
+        statedict = torch.load(adaface_models["ir_50"], weights_only=False)['state_dict']
+        model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
+        self.model.load_state_dict(model_statedict)
         self.model.eval()
         self.landmark = {}
         with open('Model/lfw_landmark/lfw_landmark.txt') as f:
@@ -28,15 +30,6 @@ class OpenFaceAttackFramework:
         for line in landmark_lines:
             l = line.replace('\n','').split('\t')
             self.landmark[l[0]] = [int(k) for k in l[1:]]
-    def ReadImage(self, pathname):
-        img = cv2.imread(pathname)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_LINEAR)
-        img = np.transpose(img, (2, 0, 1))
-        img = img.astype(np.float32) / 255.0
-        I_ = torch.from_numpy(img).unsqueeze(0)
-        I_ = I_.cuda()
-        return I_       
     def alignment(self,src_img,src_pts):
         ref_pts = [ [30.2946, 51.6963],[65.5318, 51.5014],
             [48.0252, 71.7366],[33.5493, 92.3655],[62.7299, 92.2041] ]
@@ -48,7 +41,7 @@ class OpenFaceAttackFramework:
 
         tfm = get_similarity_transform_for_cv2(s, r)
         face_img = cv2.warpAffine(src_img, tfm, crop_size)
-        return face_img
+        return face_img        
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
@@ -76,9 +69,12 @@ class OpenFaceAttackFramework:
             if len(pairs) == 100:
                 break
         return pairs
-    def verify_pair(self, img1_path, img2_path, threshold=0.4):
-        img1 = self.ReadImage(pathname=img1_path)
-        img2 = self.ReadImage(pathname=img2_path)
+    def to_input(self,pil_rgb_image):
+        np_img = np.array(pil_rgb_image)
+        brg_img = ((np_img[:,:,::-1] / 255.) - 0.5) / 0.5
+        tensor = torch.tensor([brg_img.transpose(2,0,1)]).float()
+        return tensor
+    def verify_pair(self, img1_path, img2_path, threshold=1.2):
         img1_parts = img1_path.split(os.sep)
         img2_parts = img2_path.split(os.sep)
         
@@ -95,24 +91,24 @@ class OpenFaceAttackFramework:
         # Load images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
-        
         try:
             img1 = self.alignment(img1, self.landmark[landmark_key1])
             img2 = self.alignment(img2, self.landmark[landmark_key2])
         except KeyError:
             img1 = cv2.resize(img1, (96, 112))
             img2 = cv2.resize(img2, (96, 112))
-        # Combine images into a batch
-        I_ = torch.cat([img1, img2], 0)
-        I_ = Variable(I_, requires_grad=False)
-        # Get embeddings from the model
-        with torch.no_grad():
-            f, f_736 = self.model(I_)
         
-        df = f_736[0] - f_736[1]
-        df = torch.dot(df, df)
-        print(df)
+        bgr_tensor_input1 = self.to_input(img1)
+        bgr_tensor_input2 = self.to_input(img2)
+        features = []
+        with torch.no_grad():
+            feature1, _ = self.model(bgr_tensor_input1)
+            feature2, _ = self.model(bgr_tensor_input2)
+            features.append(feature1)
+            features.append(feature2)
 
+        similarity_scores = torch.cat(features) @ torch.cat(features).T
+        print(similarity_scores)
         return False
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
@@ -145,10 +141,9 @@ class OpenFaceAttackFramework:
         # Compute L2 distance
         distance = torch.norm(feat1 - feat2, p=2)
         
-        # Define loss based on attack goal
-        if label == 1:  # We want to decrease distance (make different people look same)
+        if label == 1:  
             loss = distance
-        else:  # We want to increase distance (make same person look different)
+        else:  
             loss = -distance
         
 
@@ -216,19 +211,16 @@ class OpenFaceAttackFramework:
             # Compute L2 distance
             distance = torch.norm(feat1 - feat2, p=2)
             
-            # Define loss based on attack goal
-            if label == 1:  # We want to decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # We want to increase distance (make same person look different)
+            else:  
                 loss = -distance
-            
-
             
             # Take gradient step
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() + alpha * grad.sign()  # Note the minus sign
+            perturbed_image = perturbed_image.detach() + alpha * grad.sign() 
             
             # Project back to epsilon ball and valid image range
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
@@ -287,10 +279,9 @@ class OpenFaceAttackFramework:
             # Compute distance between feature vectors
             distance = torch.norm(feat1 - feat2, p=2)
             
-            # Define loss based on attack goal
-            if label == 1:  # Decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # Increase distance (make same person look different)
+            else:  
                 loss = -distance
             
             # Compute gradients
@@ -299,7 +290,6 @@ class OpenFaceAttackFramework:
             # Detach from computation graph
             adv_img = adv_img.detach()
             
-            # Update adversarial image with sign of gradient (FGSM-like step)
             adv_img = adv_img + alpha * torch.sign(grad)
             a = torch.clamp(ori_img - epsilon, min=0)
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
@@ -365,9 +355,9 @@ class OpenFaceAttackFramework:
             distance = torch.norm(feat1 - feat2, p=2)
             
             # Define loss based on attack goal
-            if label == 1:  # Decrease distance (make different people look same)
+            if label == 1:  
                 loss = distance
-            else:  # Increase distance (make same person look different)
+            else:  
                 loss = -distance
             
             grad = torch.autograd.grad(loss, adv_img)[0]
@@ -462,13 +452,9 @@ class OpenFaceAttackFramework:
             threshold = 1.0
 
             
-            # Adapt f-function from torchattacks for our face recognition task
-            if label == 1:  # Decrease distance (make different people look same)
-                # We want distance to be minimized, so penalize if it's large
+            if label == 1: 
                 f_loss = torch.clamp(distance - kappa, min=0).sum()
-            else:  # Increase distance (make same person look different)
-                # We want distance to be maximized, so penalize if it's small
-                # Assuming a threshold of 1.0 for simplicity
+            else:  
                 f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
             
             # Total cost
@@ -479,11 +465,10 @@ class OpenFaceAttackFramework:
             cost.backward()
             optimizer.step()
             
-            # Update best adversarial images
-            # For face recognition, success condition is based on distance threshold
-            if label == 1:  # We want small distance
+
+            if label == 1:  
                 condition = (distance < threshold).float()
-            else:  # We want large distance
+            else: 
                 condition = (distance > threshold).float()
             
             # Filter out images that either don't meet the condition or have larger L2
@@ -550,10 +535,9 @@ class OpenFaceAttackFramework:
                 feat = F.normalize(feat, p=2, dim=1)
                 distance = torch.norm(feat - feat2, p=2)
                 
-                # Define loss based on attack goal
-                if label == 1:  # Decrease distance (make different people look same)
+                if label == 1:  
                     return distance
-                else:  # Increase distance (make same person look different)
+                else:  
                     return -distance
         
         # SPSA attack loop
@@ -575,9 +559,9 @@ class OpenFaceAttackFramework:
             
             # Update the adversarial example in the direction of the estimated gradient
             # Note the sign: We use minus for gradient descent direction
-            if label == 1:  # Minimize distance
+            if label == 1: 
                 update_direction = -1
-            else:  # Maximize distance
+            else:  
                 update_direction = 1
                 
             # Apply estimated gradient to update the adversarial example
@@ -637,10 +621,10 @@ class OpenFaceAttackFramework:
                 return distance.item()
         
         # Determine the best distance based on the attack goal
-        if label == 1:  # Make different people look same (minimize distance)
+        if label == 1:  
             best_distance = compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist < curr_dist
-        else:  # Make same person look different (maximize distance)
+        else:  
             best_distance = -compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist > curr_dist
         
@@ -759,6 +743,7 @@ class OpenFaceAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
+
         for attack_type in []:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
@@ -786,121 +771,12 @@ class OpenFaceAttackFramework:
 
 
 if __name__ == "__main__":
-    framework = OpenFaceAttackFramework(
+    framework = VGGAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
+        model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
     for scenario, metrics in results.items():
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
-
-
-    """
-    if len(framework.pairs) > 0:
-        img1_path, img2_path, label = framework.pairs[50]  # Get the first pair
-        print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
-    else:
-        print("No image pairs found. Please check your dataset path.")
-        sys.exit(1)
-    
-    # Generate adversarial examples using different attack methods
-    attacks = {
-        "FGSM": framework.generateFGSMAttack,
-        "PGD": framework.generatePGDAttack,
-        "BIM": framework.generateBIMAttack,
-        "MIFGSM": framework.generateMIFGSMAttack,
-        "Square": framework.generateSquareAttack,
-        "SPSA": framework.generateSPSAAttack,
-        "CW": framework.generateCWAttack
-    }
-    
-    # Select one attack to debug
-    attack_name = "SPSA"  # Change this to debug different attacks
-    attack_func = attacks[attack_name]
-    
-    # Generate the adversarial example
-    print(f"Generating {attack_name} adversarial example...")
-    adv_img_path = attack_func(img1_path, img2_path, label)
-    print(f"Adversarial example saved to: {adv_img_path}")
-    
-    # Load original images and adversarial image for display
-    img1 = cv2.imread(img1_path)
-    img2 = cv2.imread(img2_path)
-    adv_img = cv2.imread(adv_img_path)
-    
-    # Convert from BGR to RGB for display
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
-    adv_img = cv2.cvtColor(adv_img, cv2.COLOR_BGR2RGB)
-    
-    # Resize for uniform display
-    img1 = cv2.resize(img1, (224, 224))
-    img2 = cv2.resize(img2, (224, 224))
-    adv_img = cv2.resize(adv_img, (224, 224))
-    
-    # Create a figure with subplots
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
-    # Display the images
-    axes[0].imshow(img1)
-    axes[0].set_title("Original Image")
-    axes[0].axis('off')
-    
-    axes[1].imshow(adv_img)
-    axes[1].set_title(f"{attack_name} Adversarial")
-    axes[1].axis('off')
-    
-    axes[2].imshow(img2)
-    axes[2].set_title("Target Image")
-    axes[2].axis('off')
-    
-    # Calculate and display the verification results
-    # Looking at the original function, verify_pair returns the comparison with a threshold
-    # So the results are already boolean (True for match, False for no match)
-    orig_match = framework.verify_pair(img1_path, img2_path)
-    adv_match = framework.verify_pair(adv_img_path, img2_path)
-    
-    # Define attack success based on the goal
-    # If label=1 (same person): attack success means changing match to no match
-    # If label=0 (different people): attack success means changing no match to match
-    if label == 1:
-        attack_success = orig_match and not adv_match  # Changed from match to no match
-    else:
-        attack_success = not orig_match and adv_match  # Changed from no match to match
-    
-    # Calculate perturbation magnitude
-    perturbation = adv_img.astype(np.float32) - img1.astype(np.float32)
-    l2_norm = np.sqrt(np.sum(perturbation**2))
-    linf_norm = np.max(np.abs(perturbation))
-    
-    # Display results as text
-    result_text = (
-        f"Attack: {attack_name}\n"
-        f"Original pair verification: {'Match' if orig_match else 'No Match'}\n"
-        f"Adversarial pair verification: {'Match' if adv_match else 'No Match'}\n"
-        f"Attack {'successful' if attack_success else 'failed'}\n"
-        f"L2 perturbation: {l2_norm:.2f}\n"
-        f"L∞ perturbation: {linf_norm:.2f}"
-    )
-    
-    plt.figtext(0.5, 0.01, result_text, ha='center', fontsize=12, bbox={"facecolor":"orange", "alpha":0.2, "pad":5})
-    
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.25)  # Make room for the text
-    plt.show()
-    
-    # Also display the perturbation itself (magnified for visibility)
-    plt.figure(figsize=(10, 5))
-    
-    # Normalize perturbation for better visualization
-    perturbation_vis = np.abs(perturbation)
-    perturbation_vis = perturbation_vis / np.max(perturbation_vis) * 255
-    
-    plt.imshow(perturbation_vis.astype(np.uint8))
-    plt.title(f"Perturbation Map ({attack_name})")
-    plt.colorbar(label="Magnitude")
-    plt.show()
-    
-    print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
-    """
