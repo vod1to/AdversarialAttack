@@ -11,8 +11,8 @@ from Model.Architecture import AdaFaceArchitecture
 import matplotlib.pyplot as plt
 from sphereUtils.matlab_cp2tform import get_similarity_transform_for_cv2
 
-class VGGAttackFramework:
-    def __init__(self, data_dir, model_path, device='cuda'):
+class AdaFaceAttackFramework:
+    def __init__(self, data_dir, device='cuda'):
         self.data_dir = data_dir
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
@@ -23,6 +23,7 @@ class VGGAttackFramework:
         statedict = torch.load(adaface_models["ir_50"], weights_only=False)['state_dict']
         model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
         self.model.load_state_dict(model_statedict)
+        self.model = self.model.to(self.device)
         self.model.eval()
         self.landmark = {}
         with open('Model/lfw_landmark/lfw_landmark.txt') as f:
@@ -33,7 +34,7 @@ class VGGAttackFramework:
     def alignment(self,src_img,src_pts):
         ref_pts = [ [30.2946, 51.6963],[65.5318, 51.5014],
             [48.0252, 71.7366],[33.5493, 92.3655],[62.7299, 92.2041] ]
-        crop_size = (96, 112)
+        crop_size = (112, 112)
         src_pts = np.array(src_pts).reshape(5,2)
 
         s = np.array(src_pts).astype(np.float32)
@@ -55,9 +56,8 @@ class VGGAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
-                break
-        
+            if len(pairs) == 1:
+                break 
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -66,15 +66,15 @@ class VGGAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 100:
-                break
+            if len(pairs) == 2:
+                break 
         return pairs
     def to_input(self,pil_rgb_image):
         np_img = np.array(pil_rgb_image)
         brg_img = ((np_img[:,:,::-1] / 255.) - 0.5) / 0.5
-        tensor = torch.tensor([brg_img.transpose(2,0,1)]).float()
+        tensor = torch.from_numpy(np.array([brg_img.transpose(2,0,1)])).float().to(self.device)
         return tensor
-    def verify_pair(self, img1_path, img2_path, threshold=1.2):
+    def verify_pair(self, img1_path, img2_path, threshold=0.3):
         img1_parts = img1_path.split(os.sep)
         img2_parts = img2_path.split(os.sep)
         
@@ -88,346 +88,414 @@ class VGGAttackFramework:
         landmark_key1 = f"{person1}/{file1}"
         landmark_key2 = f"{person2}/{file2}"
         
+        # Create landmark keys in format "person/person_0001.jpg"
+        is_adv_example = any(suffix in file1 for suffix in ['_fgsm_adv.jpg', '_pgd_adv.jpg', '_bim_adv.jpg', 
+                                                        '_mifgsm_adv.jpg', '_cw_adv.jpg', '_spsa_adv.jpg', 
+                                                        '_square_adv.jpg'])
+        
+        # For adversarial examples, use the original file's landmark info
+        if is_adv_example:
+            base_name = '_'.join(file1.split('_')[:-2]) 
+            original_file = base_name + '.jpg'
+            landmark_key1 = f"{person1}/{original_file}"
+        else:
+            landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
         # Load images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
-        try:
-            img1 = self.alignment(img1, self.landmark[landmark_key1])
-            img2 = self.alignment(img2, self.landmark[landmark_key2])
-        except KeyError:
-            img1 = cv2.resize(img1, (96, 112))
-            img2 = cv2.resize(img2, (96, 112))
+        
+        img1 = self.alignment(img1, self.landmark[landmark_key1])
+        img2 = self.alignment(img2, self.landmark[landmark_key2])
         
         bgr_tensor_input1 = self.to_input(img1)
         bgr_tensor_input2 = self.to_input(img2)
-        features = []
         with torch.no_grad():
             feature1, _ = self.model(bgr_tensor_input1)
             feature2, _ = self.model(bgr_tensor_input2)
-            features.append(feature1)
-            features.append(feature2)
-
-        similarity_scores = torch.cat(features) @ torch.cat(features).T
-        print(similarity_scores)
-        return False
-    def generateFGSMAttack(self, img1_path, img2_path, label = None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+        similarity_score = torch.mm(feature1, feature2.T).item()
+        return similarity_score > threshold
+    def generateFGSMAttack(self, img1_path, img2_path, label=None, epsilon=8/255):
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        img1_adv = img1.clone().detach().requires_grad_(True)
-        epsilon = 8/255  # Attack strength parameter
-    
-        self.model.eval()
-        feat1 = self.model.get_features(img1_adv)
-        feat2 = self.model.get_features(img2)
-    
-        # Normalize features
-        feat1 = F.normalize(feat1, p=2, dim=1)
-        feat2 = F.normalize(feat2, p=2, dim=1)
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
         
-        # Compute L2 distance
-        distance = torch.norm(feat1 - feat2, p=2)
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
         
-        if label == 1:  
-            loss = distance
-        else:  
-            loss = -distance
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
         
-
-        grad_sign = torch.autograd.grad(loss, img1_adv)[0]
-        # Apply perturbation
-        perturbed_image = img1 + epsilon * grad_sign.sign()
-        # Clamp to ensure valid pixel range
-        perturbed_image = torch.clamp(perturbed_image, 0, 255)
-            
+        # Load and align images using the same approach as verify_pair
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
         
-        # Convert back to image format and save
-        adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
-        adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
-        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert img2 to tensor using the same preprocessing as in verify_pair
+        img2_tensor = self.to_input(img2)
+        
+        # Create a tensor for img1 that requires gradients
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device).requires_grad_(True)
+        
+        # Calculate target features with no gradient tracking
+        with torch.no_grad():
+            # Get features for img2
+            feature2, _ = self.model(img2_tensor)
+        
+        # Get features for img1 (with gradient tracking)
+        feature1, _ = self.model(img1_tensor)
+                
+        # Define loss based on the desired outcome
+        if label == 1:  # Same person: attack to decrease similarity
+            loss = -torch.mm(feature1, feature2.T)
+        else:  # Different person: attack to increase similarity
+            loss = torch.mm(feature1, feature2.T)
+        
+        # Compute gradient using autograd.grad (more efficient than backward)
+        grad = torch.autograd.grad(loss, img1_tensor)[0]
+        
+        # Apply FGSM perturbation (sign of gradient * epsilon)
+        perturbed_image = img1_tensor.detach() + epsilon * torch.sign(grad)
+        
+        # Ensure the perturbed image stays within valid bounds
+        perturbed_image = torch.clamp(perturbed_image, -1.0, 1.0)
+        
+        # Convert back to image format
+        adv_img = perturbed_image[0].permute(1, 2, 0).detach().cpu().numpy()
+        
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        adv_img = (adv_img + 0.5) * 255.0
+        adv_img = np.clip(adv_img[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
         
         # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_fgsm_adv.jpg')
         cv2.imwrite(output_path, adv_img)
         
         return output_path
-    def generatePGDAttack(self, img1_path, img2_path, label = None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def generatePGDAttack(self, img1_path, img2_path, label=None, epsilon=8/255, alpha=None, steps=20):
+        # Set default alpha if not provided
+        if alpha is None:
+            alpha = epsilon/10
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        epsilon = 8/255  # Total perturbation constraint
-        alpha = epsilon/10  # Step size
-        steps = 20  # Number of attack iterations
-
-        self.model.eval()
-        perturbed_image = img1.clone().detach()
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
         
-        # Add small random noise to start
-        perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon, epsilon)
-        perturbed_image = torch.clamp(perturbed_image, min=0, max=1).detach()
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
         
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert img2 to tensor using the same preprocessing as in verify_pair
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 for attack
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
         with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
-
-
+            # Get features for img2
+            feature2, _ = self.model(img2_tensor)
+        
+        # Initialize adversarial example with small random noise
+        perturbed_image = img1_tensor.clone().detach()
+        perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon/2, epsilon/2)
+        perturbed_image = torch.clamp(perturbed_image, -1.0, 1.0).detach()
+        
         # Iterative attack
         for _ in range(steps):
             # Set requires_grad
             perturbed_image.requires_grad = True
             
             # Forward pass to get features
-            feat1 = self.model.get_features(perturbed_image)
+            feature_adv, _ = self.model(perturbed_image)
             
-            # Normalize features
-            feat1 = F.normalize(feat1, p=2, dim=1)
+            # Calculate similarity score
+            similarity = torch.mm(feature_adv, feature2.T)
             
-            # Compute L2 distance
-            distance = torch.norm(feat1 - feat2, p=2)
+            # Define loss based on the desired outcome
+            if label == 1:  # Same person: attack to decrease similarity
+                loss = -similarity
+            else:  # Different person: attack to increase similarity
+                loss = similarity
             
-            if label == 1:  
-                loss = distance
-            else:  
-                loss = -distance
-            
-            # Take gradient step
+            # Compute gradient using autograd.grad
             grad = torch.autograd.grad(loss, perturbed_image)[0]
-        
+            
             # Update and detach adversarial images
-            perturbed_image = perturbed_image.detach() + alpha * grad.sign() 
+            perturbed_image = perturbed_image.detach() + alpha * torch.sign(grad)
             
             # Project back to epsilon ball and valid image range
-            delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
-            perturbed_image = torch.clamp(img1 + delta, min=0, max=255).detach()
+            delta = torch.clamp(perturbed_image - img1_tensor, min=-epsilon, max=epsilon)
+            perturbed_image = torch.clamp(img1_tensor + delta, min=-1.0, max=1.0).detach()
         
-        # Convert to image and save
-        adv_img = perturbed_image[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_img += np.array([129.1863, 104.7624, 93.5940])
-        adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
+        # Convert back to image format
+        adv_img = perturbed_image[0].permute(1, 2, 0).detach().cpu().numpy()
         
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        adv_img = (adv_img + 0.5) * 255.0
+        adv_img = np.clip(adv_img[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
+        
+        # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_pgd_adv.jpg')
         cv2.imwrite(output_path, adv_img)
         
         return output_path
-    def generateBIMAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def generateBIMAttack(self, img1_path, img2_path, label=None, epsilon=8/255, alpha=None, iterations=20):
+        if alpha is None:
+            alpha = epsilon/10
+            
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        # BIM parameters
-        epsilon = 8/255      # Total perturbation constraint
-        alpha = epsilon/10   # Step size per iteration
-        iterations = 20      # Number of attack iterations
-
-        # Extract features from target image
-        self.model.eval()
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
+        
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert images to tensors using consistent preprocessing
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 for attack using the same preprocessing as in to_input
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
         with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
+            feature2, _ = self.model(img2_tensor)
         
         # Initialize adversarial example with the original image
-        adv_img = img1.clone().detach()
-        ori_img = img1.clone().detach()
+        adv_img = img1_tensor.clone().detach()
+        ori_img = img1_tensor.clone().detach()
         
         # BIM attack loop
-        for i in range(iterations):
+        for _ in range(iterations):
             # Reset gradients
             adv_img.requires_grad = True
             
             # Forward pass to get features
-            feat1 = self.model.get_features(adv_img)
-            feat1 = F.normalize(feat1, p=2, dim=1)
+            feature_adv, _ = self.model(adv_img)
             
-            # Compute distance between feature vectors
-            distance = torch.norm(feat1 - feat2, p=2)
-            
-            if label == 1:  
-                loss = distance
-            else:  
-                loss = -distance
-            
-            # Compute gradients
-            grad = torch.autograd.grad(loss, adv_img)[0]
-            
-            # Detach from computation graph
-            adv_img = adv_img.detach()
-            
-            adv_img = adv_img + alpha * torch.sign(grad)
-            a = torch.clamp(ori_img - epsilon, min=0)
-            b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
-            c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
-            
-            # Ensure pixel values stay within valid range
-            adv_img = torch.clamp(c, min=0, max=255).detach()
-        
-        # Convert to image and save
-        adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_output += np.array([129.1863, 104.7624, 93.5940])
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
-        
-        output_path = img1_path.replace('.jpg', '_bim_adv.jpg')
-        cv2.imwrite(output_path, adv_output)
-        
-        return output_path
-    def generateMIFGSMAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
-        
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        # MI-FGSM parameters
-        epsilon = 8/255       # Total perturbation constraint
-        alpha = epsilon/10    # Step size per iteration
-        iterations = 20       # Number of attack iterations
-        decay_factor = 0.9    # Momentum decay factor
-
-        # Extract features from target image
-        self.model.eval()
-        with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
-        
-        # Initialize adversarial example with the original image
-        adv_img = img1.clone().detach()
-        
-        # Initialize the momentum term to zero
-        momentum = torch.zeros_like(img1).to(self.device)
-        
-        # MI-FGSM attack loop
-        for i in range(iterations):
-            # Reset gradients
-            adv_img.requires_grad = True
-            
-            # Forward pass to get features
-            feat1 = self.model.get_features(adv_img)
-            feat1 = F.normalize(feat1, p=2, dim=1)
-            
-            # Compute distance between feature vectors
-            distance = torch.norm(feat1 - feat2, p=2)
+            # Calculate similarity using matrix multiplication (consistent with verify function)
+            similarity = torch.mm(feature_adv, feature2.T)
             
             # Define loss based on attack goal
-            if label == 1:  
-                loss = distance
-            else:  
-                loss = -distance
+            if label == 1:  # Same person: attack to decrease similarity
+                loss = -similarity
+            else:  # Different person: attack to increase similarity
+                loss = similarity
             
+            # Compute gradients using autograd.grad
             grad = torch.autograd.grad(loss, adv_img)[0]
             
             # Detach from computation graph
             adv_img = adv_img.detach()
             
-            grad_norm = torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
-            grad = grad / grad_norm 
+            # Update adversarial image with sign of gradient (FGSM-like step)
+            adv_img = adv_img + alpha * torch.sign(grad)
             
-            # Update momentum term
-            grad = grad + momentum * decay_factor
-            momentum = grad            
-            adv_img = adv_img + alpha * grad.sign()
-            
-            delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
-            adv_img = img1 + delta
-            adv_img = torch.clamp(adv_img, min=0, max=255)
-        # Convert to image and save
-        adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_output += np.array([129.1863, 104.7624, 93.5940])
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+            # Project back into epsilon ball and valid image range
+            # Apply BIM-specific clipping approach
+            a = torch.clamp(ori_img - epsilon, min=-1.0)
+            b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
+            c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
+            adv_img = torch.clamp(c, min=-1.0, max=1.0).detach()
         
-        output_path = img1_path.replace('.jpg', '_mifgsm_adv.jpg')
-        cv2.imwrite(output_path, adv_output)
+        # Convert back to image format
+        perturbed_image = adv_img[0].permute(1, 2, 0).detach().cpu().numpy()
+        
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        perturbed_image = (perturbed_image + 0.5) * 255.0
+        perturbed_image = np.clip(perturbed_image[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
+        
+        # Save the adversarial example
+        output_path = img1_path.replace('.jpg', '_bim_adv.jpg')
+        cv2.imwrite(output_path, perturbed_image)
         
         return output_path
-    def generateCWAttack(self, img1_path, img2_path, label=None, c=1.0, kappa=0, steps=30, lr=0.01):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def generateMIFGSMAttack(self, img1_path, img2_path, label=None, epsilon=8/255, alpha=None, iterations=20, decay_factor=0.9):
+        if alpha is None:
+            alpha = epsilon/10
+            
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
         
-        # Following torchattacks approach
-        self.model.eval()
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
         
-        # Functions from torchattacks
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert images to tensors using consistent preprocessing
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 using the same preprocessing
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
+        with torch.no_grad():
+            feature2, _ = self.model(img2_tensor)
+        
+        # Initialize adversarial example with the original image
+        adv_img = img1_tensor.clone().detach()
+        
+        # Initialize the momentum term to zero
+        momentum = torch.zeros_like(img1_tensor).to(self.device)
+        
+        # MI-FGSM attack loop
+        for _ in range(iterations):
+            # Reset gradients
+            adv_img.requires_grad = True
+            
+            # Forward pass to get features
+            feature_adv, _ = self.model(adv_img)
+            
+            # Calculate similarity using matrix multiplication (consistent with verify function)
+            similarity = torch.mm(feature_adv, feature2.T)
+            
+            # Define loss based on attack goal
+            if label == 1:  # Same person: attack to decrease similarity
+                loss = -similarity
+            else:  # Different person: attack to increase similarity
+                loss = similarity
+            
+            # Compute gradients using autograd.grad
+            grad = torch.autograd.grad(loss, adv_img)[0]
+            
+            # Detach from computation graph
+            adv_img = adv_img.detach()
+            
+            # Normalize gradient (L1 norm)
+            grad_norm = torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+            grad = grad / (grad_norm + 1e-10)  # Add small constant to prevent division by zero
+            
+            # Update momentum term
+            momentum = decay_factor * momentum + grad
+            
+            # Update adversarial image with momentum sign
+            adv_img = adv_img + alpha * momentum.sign()
+            
+            # Project back into epsilon ball and valid image range
+            delta = torch.clamp(adv_img - img1_tensor, min=-epsilon, max=epsilon)
+            adv_img = torch.clamp(img1_tensor + delta, min=-1.0, max=1.0).detach()
+        
+        # Convert back to image format
+        perturbed_image = adv_img[0].permute(1, 2, 0).detach().cpu().numpy()
+        
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        perturbed_image = (perturbed_image + 0.5) * 255.0
+        perturbed_image = np.clip(perturbed_image[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
+        
+        # Save the adversarial example
+        output_path = img1_path.replace('.jpg', '_mifgsm_adv.jpg')
+        cv2.imwrite(output_path, perturbed_image)
+        
+        return output_path
+    def generateCWAttack(self, img1_path, img2_path, label=None, c=1.0, kappa=0, steps=30, lr=0.01, threshold=0.3):
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
+        
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
+        
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert images to tensors using consistent preprocessing
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 using the same preprocessing
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
+        with torch.no_grad():
+            feature2, _ = self.model(img2_tensor)
+        
+        # Functions for CW transformation to tanh space
         def tanh_space(x):
             return 0.5 * (torch.tanh(x) + 1)
         
         def inverse_tanh_space(x):
-            return torch.atanh(torch.clamp(x * 2 - 1, min=-1, max=1))
+            # Ensure values are in valid range for atanh
+            x_clamped = torch.clamp(x, min=-0.999, max=0.999)
+            return torch.atanh(x_clamped)
         
         # Initialize w in the inverse tanh space
-        w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
+        # We need to map from [-1,1] to [0,1] for tanh space transformation
+        img1_norm = (img1_tensor + 1.0) / 2.0
+        w = inverse_tanh_space(2 * img1_norm - 1).detach()
         w.requires_grad = True
         
         # Set up optimizer
         optimizer = torch.optim.Adam([w], lr=lr)
         
         # Initialize best adversarial example
-        best_adv_images = img1.clone().detach()
-        best_L2 = 1e10 * torch.ones((len(img1))).to(self.device)
+        best_adv_images = img1_tensor.clone().detach()
+        best_L2 = 1e10 * torch.ones(len(img1_tensor)).to(self.device)
         prev_cost = 1e10
-        
-        # Extract features from target image
-        with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
         
         # Prepare loss functions
         MSELoss = nn.MSELoss(reduction="none")
@@ -435,27 +503,25 @@ class VGGAttackFramework:
         
         # Optimization loop
         for step in range(steps):
-            # Get adversarial images in [0,1] space and rescale to original range
+            # Get adversarial images in [0,1] space and rescale to original [-1,1] range
             adv_images_norm = tanh_space(w)
-            adv_images = adv_images_norm * 255.0  # Back to [0,255] range
+            adv_images = adv_images_norm * 2.0 - 1.0  # Convert from [0,1] to [-1,1]
             
-            # Calculate L2 distance loss (in pixel space)
-            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1 / 255.0)).sum(dim=1)
+            # Calculate L2 distance loss (in normalized space)
+            current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1_norm)).sum(dim=1)
             L2_loss = current_L2.sum()
             
             # Get features of adversarial image
-            feat1 = self.model.get_features(adv_images)
-            feat1 = F.normalize(feat1, p=2, dim=1)
+            feature_adv, _ = self.model(adv_images)
             
-            # Calculate feature distance
-            distance = torch.norm(feat1 - feat2, p=2, dim=1)
-            threshold = 1.0
-
+            # Calculate similarity using matrix multiplication (consistent with verify function)
+            similarity = torch.mm(feature_adv, feature2.T)
             
-            if label == 1: 
-                f_loss = torch.clamp(distance - kappa, min=0).sum()
-            else:  
-                f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
+            # Adapt f-function for similarity based on label
+            if label == 1:  # Same person: want to decrease similarity below threshold
+                f_loss = torch.clamp(similarity - threshold + kappa, min=0)
+            else:  # Different person: want to increase similarity above threshold
+                f_loss = torch.clamp(threshold - similarity + kappa, min=0)
             
             # Total cost
             cost = L2_loss + c * f_loss
@@ -465,11 +531,11 @@ class VGGAttackFramework:
             cost.backward()
             optimizer.step()
             
-
-            if label == 1:  
-                condition = (distance < threshold).float()
-            else: 
-                condition = (distance > threshold).float()
+            # Determine which images satisfy the adversarial condition
+            if label == 1:  # Same person: success if similarity < threshold
+                condition = (similarity < threshold).float()
+            else:  # Different person: success if similarity > threshold
+                condition = (similarity > threshold).float()
             
             # Filter out images that either don't meet the condition or have larger L2
             mask = condition * (best_L2 > current_L2.detach())
@@ -485,60 +551,71 @@ class VGGAttackFramework:
                     break
                 prev_cost = cost.item()
         
-        # Add mean back to final result
-        adv_output = best_adv_images[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_output += np.array([129.1863, 104.7624, 93.5940])
-
-        adv_output = np.nan_to_num(adv_output, nan=0.0, posinf=255.0, neginf=0.0)
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        # Convert back to image format
+        perturbed_image = best_adv_images[0].permute(1, 2, 0).detach().cpu().numpy()
         
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        perturbed_image = (perturbed_image + 0.5) * 255.0
+        
+        # Handle any NaN values that might have been introduced
+        perturbed_image = np.nan_to_num(perturbed_image, nan=0.0, posinf=255.0, neginf=0.0)
+        
+        # Convert back to RGB from BGR and clip to valid range
+        perturbed_image = np.clip(perturbed_image[:,:,::-1], 0, 255).astype(np.uint8)
+        
+        # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_cw_adv.jpg')
-        cv2.imwrite(output_path, adv_output)
+        cv2.imwrite(output_path, perturbed_image)
         
         return output_path
-    def generateSPSAAttack(self, img1_path, img2_path, label=None):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def generateSPSAAttack(self, img1_path, img2_path, label=None, epsilon=8/255, iterations=100, learning_rate=0.01, delta=0.01):
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        # SPSA parameters
-        epsilon = 8/255        # Total perturbation constraint
-        iterations = 100       # Number of attack iterations
-        learning_rate = 0.01   # Learning rate for optimization
-        delta = 0.01           # Perturbation size for gradient estimation
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
         
-        # Extract features from target image
-        self.model.eval()
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert images to tensors using consistent preprocessing
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 using the same preprocessing
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
         with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
+            feature2, _ = self.model(img2_tensor)
         
         # Initialize adversarial example with the original image
-        adv_img = img1.clone().detach()
+        adv_img = img1_tensor.clone().detach()
         
         # Function to compute loss based on goal
         def compute_loss(perturbed_img):
             with torch.no_grad():
-                feat = self.model.get_features(perturbed_img)
-                feat = F.normalize(feat, p=2, dim=1)
-                distance = torch.norm(feat - feat2, p=2)
+                feature_perturbed, _ = self.model(perturbed_img)
+                # Calculate similarity using matrix multiplication (consistent with verify function)
+                similarity = torch.mm(feature_perturbed, feature2.T)
                 
-                if label == 1:  
-                    return distance
-                else:  
-                    return -distance
+                if label == 1:  # Same person: want to decrease similarity (below threshold)
+                    return similarity  # Maximize this loss to decrease similarity
+                else:  # Different person: want to increase similarity (above threshold)
+                    return -similarity  # Minimize this loss to increase similarity
         
         # SPSA attack loop
         for i in range(iterations):
@@ -547,89 +624,94 @@ class VGGAttackFramework:
             
             # Evaluate loss at points in both positive and negative directions
             pos_perturbed = adv_img + delta * bernoulli
-            pos_perturbed = torch.clamp(pos_perturbed, 0, 255)
+            pos_perturbed = torch.clamp(pos_perturbed, -1.0, 1.0)
             loss_pos = compute_loss(pos_perturbed)
             
             neg_perturbed = adv_img - delta * bernoulli
-            neg_perturbed = torch.clamp(neg_perturbed, 0, 255)
+            neg_perturbed = torch.clamp(neg_perturbed, -1.0, 1.0)
             loss_neg = compute_loss(neg_perturbed)
             
             # Estimate gradient using finite differences
             gradient_estimate = (loss_pos - loss_neg) / (2 * delta)
             
-            # Update the adversarial example in the direction of the estimated gradient
-            # Note the sign: We use minus for gradient descent direction
-            if label == 1: 
-                update_direction = -1
-            else:  
-                update_direction = 1
-                
             # Apply estimated gradient to update the adversarial example
-            adv_img = adv_img + update_direction * learning_rate * gradient_estimate * bernoulli
+            # Note: we want to minimize the loss, so we use negative gradient direction
+            adv_img = adv_img - learning_rate * gradient_estimate * bernoulli
             
             # Project back to epsilon-ball around original image and ensure valid pixel range
-            delta_img = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
-            adv_img = img1 + delta_img
-            adv_img = torch.clamp(adv_img, 0, 255)
+            delta_img = torch.clamp(adv_img - img1_tensor, min=-epsilon, max=epsilon)
+            adv_img = img1_tensor + delta_img
+            adv_img = torch.clamp(adv_img, -1.0, 1.0)
             
             # Optionally reduce learning rate over time (learning rate decay)
             learning_rate = learning_rate * 0.99
         
-        # Convert to image and save
-        adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_output += np.array([129.1863, 104.7624, 93.5940])
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
+        # Convert back to image format
+        perturbed_image = adv_img[0].permute(1, 2, 0).detach().cpu().numpy()
         
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        perturbed_image = (perturbed_image + 0.5) * 255.0
+        perturbed_image = np.clip(perturbed_image[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
+        
+        # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_spsa_adv.jpg')
-        cv2.imwrite(output_path, adv_output)
+        cv2.imwrite(output_path, perturbed_image)
+        
         return output_path
-    def generateSquareAttack(self, img1_path, img2_path, label=None, n_iters=1000, p_init=0.1):
-        img1 = cv2.imread(img1_path)
-        img2 = cv2.imread(img2_path)
+    def generateSquareAttack(self, img1_path, img2_path, label=None, n_iters=1000, p_init=0.1, epsilon=8/255, threshold=0.3):
+        # Extract person and file information from paths
+        img1_parts = img1_path.split(os.sep)
+        img2_parts = img2_path.split(os.sep)
         
-        img1 = cv2.resize(img1, (224, 224))
-        img2 = cv2.resize(img2, (224, 224))
-
-        img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-        img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
-
-        mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
-        img1 -= mean
-        img2 -= mean
-
-        img1 = img1.to(self.device)
-        img2 = img2.to(self.device)
-
-        # Square attack parameters
-        epsilon = 8/255
+        person1 = img1_parts[-2]
+        person2 = img2_parts[-2]
         
-        # Extract features from target image
-        self.model.eval()
+        file1 = img1_parts[-1]
+        file2 = img2_parts[-1]
+        
+        # Create landmark keys
+        landmark_key1 = f"{person1}/{file1}"
+        landmark_key2 = f"{person2}/{file2}"
+        
+        # Load and align images
+        img1_orig = cv2.imread(img1_path)
+        img2_orig = cv2.imread(img2_path)
+        
+        img1 = self.alignment(img1_orig, self.landmark[landmark_key1])
+        img2 = self.alignment(img2_orig, self.landmark[landmark_key2])
+        
+        # Convert images to tensors using consistent preprocessing
+        img2_tensor = self.to_input(img2)
+        
+        # Process img1 using the same preprocessing
+        np_img1 = np.array(img1)
+        brg_img1 = ((np_img1[:,:,::-1] / 255.) - 0.5) / 0.5
+        img1_tensor = torch.from_numpy(np.array([brg_img1.transpose(2,0,1)])).float().to(self.device)
+        
+        # Calculate target features with no gradient tracking
         with torch.no_grad():
-            feat2 = self.model.get_features(img2)
-            feat2 = F.normalize(feat2, p=2, dim=1)
+            feature2, _ = self.model(img2_tensor)
         
         # Initialize adversarial example with the original image
-        x_adv = img1.clone().detach()
+        x_adv = img1_tensor.clone().detach()
         
-        # Function to evaluate distance
-        def compute_distance(x):
+        # Function to evaluate similarity using matrix multiplication
+        def compute_similarity(x):
             with torch.no_grad():
-                feat = self.model.get_features(x)
-                feat = F.normalize(feat, p=2, dim=1)
-                distance = torch.norm(feat - feat2, p=2)
-                return distance.item()
+                feature_x, _ = self.model(x)
+                similarity = torch.mm(feature_x, feature2.T)
+                return similarity.item()
         
-        # Determine the best distance based on the attack goal
-        if label == 1:  
-            best_distance = compute_distance(x_adv)
-            is_better = lambda new_dist, curr_dist: new_dist < curr_dist
-        else:  
-            best_distance = -compute_distance(x_adv)
-            is_better = lambda new_dist, curr_dist: new_dist > curr_dist
+        # Determine the attack goal based on the label
+        if label == 1:  # Same person pair - want to decrease similarity
+            best_similarity = compute_similarity(x_adv)
+            is_better = lambda new_sim, curr_sim: new_sim < curr_sim
+        else:  # Different person pair - want to increase similarity
+            best_similarity = compute_similarity(x_adv)
+            is_better = lambda new_sim, curr_sim: new_sim > curr_sim
         
-        # Reshape image for easier manipulation
-        h, w = 224, 224  # Image height and width
+        # Get image dimensions
+        _, _, h, w = img1_tensor.shape  # Should be (1, 3, h, w)
         
         # Main attack loop
         for i in range(n_iters):
@@ -650,38 +732,38 @@ class VGGAttackFramework:
             # Create a copy of the current best adversarial example
             x_new = x_adv.clone().detach()
             
-            # Generate perturbation
-            noise = torch.empty((1, 1 if channel != -1 else 3, s, s), device=self.device).uniform_(-epsilon, epsilon)
-            
-            # Apply the perturbation to the selected region
+            # Generate perturbation in normalized space [-1, 1]
             if channel == -1:  # Apply to all channels
+                noise = torch.empty((1, 3, s, s), device=self.device).uniform_(-2*epsilon, 2*epsilon)
                 x_new[0, :, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
-                    img1[0, :, h_start:h_start+s, w_start:w_start+s] + noise, 0, 255)
+                    img1_tensor[0, :, h_start:h_start+s, w_start:w_start+s] + noise[0], -1.0, 1.0)
             else:  # Apply to specific channel
+                noise = torch.empty((1, s, s), device=self.device).uniform_(-2*epsilon, 2*epsilon)
                 x_new[0, channel, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
-                    img1[0, channel, h_start:h_start+s, w_start:w_start+s] + noise.squeeze(1), 0, 255)
+                    img1_tensor[0, channel, h_start:h_start+s, w_start:w_start+s] + noise[0], -1.0, 1.0)
             
-            # Calculate new distance
-            if label == 1:  # Minimize distance
-                new_distance = compute_distance(x_new)
-            else:  # Maximize distance
-                new_distance = -compute_distance(x_new)
+            # Evaluate the new example
+            new_similarity = compute_similarity(x_new)
             
-            # Update best adversarial example if the perturbation improves it
-            if is_better(new_distance, best_distance):
+            # Update if better
+            if is_better(new_similarity, best_similarity):
                 x_adv = x_new
-                best_distance = new_distance
-                
+                best_similarity = new_similarity
+            
             # Early stopping if we've reached a very good solution
-            if (label == 1 and best_distance < 0.5) or (label == 0 and -best_distance > 2.0):
+            if (label == 1 and best_similarity < threshold) or (label == 0 and best_similarity > threshold):
                 break
-        # Convert to image and save
-        adv_output = x_adv[0].permute(1, 2, 0).contiguous().cpu().numpy()
-        adv_output += np.array([129.1863, 104.7624, 93.5940])
-        adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
         
+        # Convert back to image format
+        perturbed_image = x_adv[0].permute(1, 2, 0).detach().cpu().numpy()
+        
+        # Reverse the normalization: (-1,1) → (0,1) → (0,255)
+        perturbed_image = (perturbed_image + 0.5) * 255.0
+        perturbed_image = np.clip(perturbed_image[:,:,::-1], 0, 255).astype(np.uint8)  # Convert back to RGB and clip
+        
+        # Save the adversarial example
         output_path = img1_path.replace('.jpg', '_square_adv.jpg')
-        cv2.imwrite(output_path, adv_output)
+        cv2.imwrite(output_path, perturbed_image)
         
         return output_path
     def evaluate_attack(self, attack_type):
@@ -725,7 +807,8 @@ class VGGAttackFramework:
                 
                 # Clean up
                 if os.path.exists(adv_img_path):
-                    os.remove(adv_img_path)
+                    #os.remove(adv_img_path)
+                    continue
                 
             except Exception as e:
                 print(f"Error processing pair: {e}")
@@ -744,7 +827,7 @@ class VGGAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in []:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "SPSA", "CW", "Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -771,9 +854,8 @@ class VGGAttackFramework:
 
 
 if __name__ == "__main__":
-    framework = VGGAttackFramework(
+    framework = AdaFaceAttackFramework(
         data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
     for scenario, metrics in results.items():

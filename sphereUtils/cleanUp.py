@@ -6,7 +6,7 @@ def delete_fgsm_adversarial_files(base_dir):
     for root, dirs, files in os.walk(base_dir):
         for file in files:
             # Check if the file ends with _fgsm_adv.jpg
-            if file.endswith("_fgsm_adv.jpg"):
+            if file.endswith("adv.jpg"):
                 file_path = os.path.join(root, file)
                 try:
                     os.remove(file_path)

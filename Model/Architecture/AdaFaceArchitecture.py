@@ -50,7 +50,7 @@ class Flatten(Module):
     """ Flat tensor
     """
     def forward(self, input):
-        return input.view(input.size(0), -1)
+        return input.reshape(input.size(0), -1)
 
 
 class LinearBlock(Module):
@@ -83,7 +83,7 @@ class GNAP(Module):
         weight = x_norm_mean / x_norm
         x = x * weight
         x = self.pool(x)
-        x = x.view(x.shape[0], -1)
+        x = x.reshape(x.shape[0], -1)
         feature = self.bn2(x)
         return feature
 
