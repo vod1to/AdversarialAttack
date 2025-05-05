@@ -18,6 +18,7 @@ class FacenetAttackFramework:
         self.model = InceptionResnetV1(pretrained="vggface2").eval()
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.L2 = []        
         print(f"Device: {self.device}")
     def prepare_pairs(self):
         pairs = []
@@ -79,6 +80,7 @@ class FacenetAttackFramework:
         emb1 = self.model(img1)
         emb2 = self.model(img2)
         l2_distance = torch.norm(emb1 - emb2, p=2).item()
+        self.L2.append(l2_distance)
         return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label=None):
         # Load images with OpenCV
@@ -794,7 +796,7 @@ class FacenetAttackFramework:
     def run_evaluation(self):
         results = {}
         # Attack evaluations
-        for attack_type in ["FGSM"]:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
 
@@ -818,7 +820,13 @@ class FacenetAttackFramework:
             'far': clean_results['false_positive'] / (clean_results['false_positive'] + clean_results['true_negative']),
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
+        self.save_l2_to_txt()
         return results
+    def save_l2_to_txt(self, filename="L2_Values/l2_values_Facenet.txt"):
+        with open(filename, 'w') as f:
+            for value in self.L2:
+                f.write(f"{value}\n")
+        print(f"Saved {len(self.L2)} L2 values to {filename}")
 
 
 

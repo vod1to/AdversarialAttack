@@ -114,6 +114,7 @@ class AdaFaceAttackFramework:
             feature1, _ = self.model(bgr_tensor_input1)
             feature2, _ = self.model(bgr_tensor_input2)
         similarity_score = torch.mm(feature1, feature2.T).item()
+        print(similarity_score)
         return similarity_score > threshold
     def generateFGSMAttack(self, img1_path, img2_path, label=None, epsilon=8/255):
         # Extract person and file information from paths
@@ -806,10 +807,8 @@ class AdaFaceAttackFramework:
                         results['true_negative'] += 1
                 
                 # Clean up
-                if os.path.exists(adv_img_path):
-                    #os.remove(adv_img_path)
-                    continue
-                
+                #if os.path.exists(adv_img_path):
+                #    os.remove(adv_img_path)                
             except Exception as e:
                 print(f"Error processing pair: {e}")
         
@@ -827,7 +826,7 @@ class AdaFaceAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "SPSA", "CW", "Square"]:
+        for attack_type in ["Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance

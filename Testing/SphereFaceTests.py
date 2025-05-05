@@ -29,6 +29,7 @@ class SphereAttackFramework:
         self.model.load_state_dict(torch.load(model_path))
         self.model.eval()
         self.landmark = {}
+        self.SimScore = []
         with open('Model/lfw_landmark/lfw_landmark.txt') as f:
             landmark_lines = f.readlines()
         for line in landmark_lines:
@@ -92,7 +93,6 @@ class SphereAttackFramework:
             base_name = '_'.join(file1.split('_')[:-2]) 
             original_file = base_name + '.jpg'
             landmark_key1 = f"{person1}/{original_file}"
-            print("FOUND")
         else:
             landmark_key1 = f"{person1}/{file1}"
             
@@ -121,6 +121,7 @@ class SphereAttackFramework:
 
         f1,f2 = f[0],f[2]
         cosine_similarity = f1.dot(f2)/(f1.norm()*f2.norm()+1e-5)
+        self.SimScore.append(cosine_similarity)
         # Compute cosine similarity
         return cosine_similarity > threshold
     def generateFGSMAttack(self, img1_path, img2_path, label=None):
@@ -860,7 +861,7 @@ class SphereAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM"]:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -883,7 +884,15 @@ class SphereAttackFramework:
             'far': clean_results['false_positive'] / (clean_results['false_positive'] + clean_results['true_negative']),
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
+        self.save_l2_to_txt()
+
         return results
+    def save_l2_to_txt(self, filename="SimScore_Values/SimScore_values_Sphere.txt"):
+        with open(filename, 'w') as f:
+            for value in self.SimScore:
+                f.write(f"{value}\n")
+        print(f"Saved {len(self.L2)} Similarity Score values to {filename}")
+
 
 
 if __name__ == "__main__":

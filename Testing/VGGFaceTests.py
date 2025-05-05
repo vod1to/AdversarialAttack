@@ -19,7 +19,8 @@ class VGGAttackFramework:
         # Initialize model
         self.model = VGGFace().to(self.device)
         self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()        
+        self.model.eval()
+        self.L2 = []        
     def prepare_pairs(self):
         pairs = []
         classes = [d for d in os.listdir(self.data_dir) 
@@ -29,13 +30,12 @@ class VGGAttackFramework:
         for person in classes:
             person_dir = os.path.join(self.data_dir, person)
             images = os.listdir(person_dir)
-            if len(images) >= 2:
+            if len(images) >= 50:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
             if len(pairs) == 50:
                 break
-        
         # Different person pairs
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
@@ -46,6 +46,7 @@ class VGGAttackFramework:
                 pairs.append((img1, img2, 0))
             if len(pairs) == 100:
                 break
+
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=1.2):
         # Read and preprocess images
@@ -77,7 +78,8 @@ class VGGAttackFramework:
             feat2 = F.normalize(feat2, p=2, dim=1)
             # Compute L2 distance
             l2_distance = torch.norm(feat1 - feat2, p=2).item()
-            return l2_distance < threshold
+        self.L2.append(l2_distance)
+        return l2_distance < threshold
     def generateFGSMAttack(self, img1_path, img2_path, label = None):
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -417,7 +419,7 @@ class VGGAttackFramework:
             
             # Calculate feature distance
             distance = torch.norm(feat1 - feat2, p=2, dim=1)
-            threshold = 1.0
+            threshold = 1.2
 
             
             if label == 1: 
@@ -712,7 +714,7 @@ class VGGAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM"]:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -735,7 +737,16 @@ class VGGAttackFramework:
             'far': clean_results['false_positive'] / (clean_results['false_positive'] + clean_results['true_negative']),
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
+        self.save_l2_to_txt()
+
         return results
+    def save_l2_to_txt(self, filename="L2_Values/l2_values_VGG.txt"):
+        with open(filename, 'w') as f:
+            for value in self.L2:
+                f.write(f"{value}\n")
+        print(f"Saved {len(self.L2)} L2 values to {filename}")
+
+
 
 
 if __name__ == "__main__":
