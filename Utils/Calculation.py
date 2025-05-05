@@ -75,18 +75,18 @@ def analyze_model_l2_degradation(file_path, model_name):
     # Color bars based on interpretation (red for bad, green for good)
     for i, bar in enumerate(bars):
         if genuine_deg_values[i] > 0:  # Increase in L2 for genuine pairs is bad
-            bar.set_color('red')
-        else:  # Decrease in L2 for genuine pairs is good
             bar.set_color('green')
+        else:  # Decrease in L2 for genuine pairs is good
+            bar.set_color('red')
     
-    plt.title(f"L2 Distance Change for {model_name} - Genuine Pairs\n(negative % is better robustness)")
+    plt.title(f"Similarity Score Change for {model_name} - Genuine Pairs\n(Positive % is better robustness)")
     plt.xlabel("Attack Type")
     plt.ylabel("% Change from Baseline")
     plt.xticks(rotation=45)
     plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.grid(axis='y', linestyle='--', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"{model_name}_genuine_l2_change.png", dpi=300)
+    plt.savefig(f"Graphs/{model_name}_genuine_l2_change.png", dpi=300)
     
     # Impostor pairs visualization (positive change is good)
     plt.figure(figsize=(10, 6))
@@ -96,18 +96,18 @@ def analyze_model_l2_degradation(file_path, model_name):
     # Color bars based on interpretation (red for bad, green for good)
     for i, bar in enumerate(bars):
         if impostor_deg_values[i] < 0:  # Decrease in L2 for impostor pairs is bad
-            bar.set_color('red')
-        else:  # Increase in L2 for impostor pairs is good
             bar.set_color('green')
+        else:  # Increase in L2 for impostor pairs is good
+            bar.set_color('red')
     
-    plt.title(f"L2 Distance Change for {model_name} - Impostor Pairs\n(positive % is better robustness)")
+    plt.title(f"Similarity Score Change for {model_name} - Impostor Pairs\n(Negative % is better robustness)")
     plt.xlabel("Attack Type")
     plt.ylabel("% Change from Baseline")
     plt.xticks(rotation=45)
     plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.grid(axis='y', linestyle='--', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"{model_name}_impostor_l2_change.png", dpi=300)
+    plt.savefig(f"Graphs/{model_name}_impostor_l2_change.png", dpi=300)
     
     # Print results
     print(f"\nResults for {model_name}:")
@@ -122,19 +122,12 @@ def analyze_model_l2_degradation(file_path, model_name):
         status = "BETTER" if value > 0 else "WORSE"
         print(f"{attack}: {value:.2f}% ({status})")
     
-    # Save results to CSV
-    df_genuine_avg.to_csv(f"{model_name}_genuine_l2_averages.csv")
-    df_impostor_avg.to_csv(f"{model_name}_impostor_l2_averages.csv")
-    df_genuine_deg.to_csv(f"{model_name}_genuine_l2_change.csv")
-    df_impostor_deg.to_csv(f"{model_name}_impostor_l2_change.csv")
-    
-    return df_genuine_deg, df_impostor_deg
 
 # Run the analysis
 if __name__ == "__main__":
-    model_name = "Facenet"  # Change this for each model
-    file_path = "E:\AdversarialAttack-2\L2_Values\l2_values_Facenet.txt"  # Change to your file naming convention
+    model_name = "AdaFace"  # Change this for each model
+    file_path = "E:\AdversarialAttack-2\L2_Values\SimScore_values_Ada.txt" 
     
-    genuine_deg, impostor_deg = analyze_model_l2_degradation(file_path, model_name)
+    analyze_model_l2_degradation(file_path, model_name)
     
-    print(f"Analysis complete for {model_name}. Check the generated CSV files and images.")
+    print(f"Analysis complete for {model_name}. Check the generated C images.")

@@ -60,7 +60,7 @@ class SphereAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) ==50:
+            if len(pairs) == 50:
                 break
         # Different person pairs
         for i in range(len(classes)):
@@ -70,7 +70,7 @@ class SphereAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) ==100:
+            if len(pairs) == 100:
                 break
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=0.35):
@@ -183,7 +183,7 @@ class SphereAttackFramework:
         epsilon = 8/255  # Attack strength parameter
         
         # Apply perturbation in the normalized space
-        perturbed_image = img1_adv.detach() + epsilon * grad_sign
+        perturbed_image = img1_adv.detach() + epsilon * grad_sign.sign()
         perturbed_image = torch.clamp(perturbed_image, -1.0, 1.0)  # Clamp to valid normalized range
         
         # Convert back to image format (0-255 range)
@@ -337,9 +337,9 @@ class SphereAttackFramework:
             cosine_similarity = torch.dot(f_adv[0], f2)/(torch.norm(f_adv[0])*torch.norm(f2)+1e-5)
             
             # Define loss based on attack goal
-            if label == 1:  # We want to increase similarity (make different people look same)
+            if label == 1:  
                 loss = -cosine_similarity
-            else:  # We want to decrease similarity (make same person look different)
+            else:  
                 loss = cosine_similarity
             
             # Compute gradients
@@ -428,10 +428,9 @@ class SphereAttackFramework:
             # Calculate cosine similarity 
             cosine_similarity = torch.dot(f_adv[0], f2)/(torch.norm(f_adv[0])*torch.norm(f2)+1e-5)
             
-            # Define loss based on attack goal
-            if label == 1:  # We want to increase similarity (make different people look same)
+            if label == 1:  
                 loss = -cosine_similarity
-            else:  # We want to decrease similarity (make same person look different)
+            else:  
                 loss = cosine_similarity
             
             # Compute gradients
@@ -548,9 +547,9 @@ class SphereAttackFramework:
             threshold = 0.35  # Threshold for cosine similarity
             
             if label == 1: 
-                f_loss = torch.clamp(cosine_similarity - threshold + kappa, min=0)
-            else:  
                 f_loss = torch.clamp(threshold - cosine_similarity + kappa, min=0)
+            else:  
+                f_loss = torch.clamp(cosine_similarity - threshold + kappa, min=0)
             
             # Total cost
             cost = L2_loss + c * f_loss
@@ -643,13 +642,10 @@ class SphereAttackFramework:
                 f_perturbed, _ = self.model(perturbed_img)
                 cosine_similarity = torch.dot(f_perturbed[0], f2)/(torch.norm(f_perturbed[0])*torch.norm(f2)+1e-5)
                 
-                # Note: For label=1 (same person pair), we want to decrease similarity
-                # For label=0 (different person pair), we want to increase similarity
-                # This is the opposite of what the original code indicates
                 if label == 1:  # Same person pair - want to decrease similarity
-                    return cosine_similarity 
+                    return -cosine_similarity 
                 else:  # Different person pair - want to increase similarity
-                    return -cosine_similarity
+                    return cosine_similarity
         
         # SPSA attack loop
         for i in range(iterations):
@@ -862,7 +858,7 @@ class SphereAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
+        for attack_type in ["FGSM"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -888,7 +884,7 @@ class SphereAttackFramework:
         self.save_l2_to_txt()
 
         return results
-    def save_l2_to_txt(self, filename="L2_Values/SimScore_values_Sphere.txt"):
+    def save_l2_to_txt(self, filename="L2_Values/SimScore_values_Sphere2.txt"):
         with open(filename, 'w') as f:
             for value in self.SimScore:
                 f.write(f"{value}\n")
