@@ -17,7 +17,8 @@ import torch
 import cv2
 import numpy as np
 from torch.autograd import Variable
-from sphereUtils.matlab_cp2tform import get_similarity_transform_for_cv2
+from Utils.matlab_cp2tform import get_similarity_transform_for_cv2
+
 class SphereAttackFramework:
     def __init__(self, data_dir, model_path, device='cuda'):
         self.data_dir = data_dir
@@ -887,13 +888,11 @@ class SphereAttackFramework:
         self.save_l2_to_txt()
 
         return results
-    def save_l2_to_txt(self, filename="SimScore_Values/SimScore_values_Sphere.txt"):
+    def save_l2_to_txt(self, filename="L2_Values/SimScore_values_Sphere.txt"):
         with open(filename, 'w') as f:
             for value in self.SimScore:
                 f.write(f"{value}\n")
-        print(f"Saved {len(self.L2)} Similarity Score values to {filename}")
-
-
+        print(f"Saved {len(self.SimScore)} Similarity Score values to {filename}")
 
 if __name__ == "__main__":
     framework = SphereAttackFramework(
@@ -906,112 +905,3 @@ if __name__ == "__main__":
         print(f"\n{scenario} Results:")
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
-    '''
-    if len(framework.pairs) > 0:
-        img1_path, img2_path, label = framework.pairs[0]  # Get the first pair
-        print(f"Using image pair: {img1_path}, {img2_path}, Same person? {label==1}")
-    else:
-        print("No image pairs found. Please check your dataset path.")
-        sys.exit(1)
-    
-    # Generate adversarial examples using different attack methods
-    attacks = {
-        "FGSM": framework.generateFGSMAttack,
-        "PGD": framework.generatePGDAttack,
-        "BIM": framework.generateBIMAttack,
-        "MIFGSM": framework.generateMIFGSMAttack,
-        "Square": framework.generateSquareAttack,
-        "SPSA": framework.generateSPSAAttack,
-        "CW": framework.generateCWAttack
-    }
-    
-    # Select one attack to debug
-    attack_name = "Square"  # Change this to debug different attacks
-    attack_func = attacks[attack_name]
-    
-    # Generate the adversarial example
-    print(f"Generating {attack_name} adversarial example...")
-    adv_img_path = attack_func(img1_path, img2_path, label)
-    print(f"Adversarial example saved to: {adv_img_path}")
-    
-    # Load original images and adversarial image for display
-    img1 = cv2.imread(img1_path)
-    img2 = cv2.imread(img2_path)
-    adv_img = cv2.imread(adv_img_path)
-    
-    # Convert from BGR to RGB for display
-    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
-    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
-    adv_img = cv2.cvtColor(adv_img, cv2.COLOR_BGR2RGB)
-    
-    # Resize for uniform display
-    img1 = cv2.resize(img1, (224, 224))
-    img2 = cv2.resize(img2, (224, 224))
-    adv_img = cv2.resize(adv_img, (224, 224))
-    
-    # Create a figure with subplots
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
-    # Display the images
-    axes[0].imshow(img1)
-    axes[0].set_title("Original Image")
-    axes[0].axis('off')
-    
-    axes[1].imshow(adv_img)
-    axes[1].set_title(f"{attack_name} Adversarial")
-    axes[1].axis('off')
-    
-    axes[2].imshow(img2)
-    axes[2].set_title("Target Image")
-    axes[2].axis('off')
-    
-    # Calculate and display the verification results
-    # Looking at the original function, verify_pair returns the comparison with a threshold
-    # So the results are already boolean (True for match, False for no match)
-    orig_match = framework.verify_pair(img1_path, img2_path)
-    adv_match = framework.verify_pair(adv_img_path, img2_path)
-    
-    # Define attack success based on the goal
-    # If label=1 (same person): attack success means changing match to no match
-    # If label=0 (different people): attack success means changing no match to match
-    if label == 1:
-        attack_success = orig_match and not adv_match  # Changed from match to no match
-    else:
-        attack_success = not orig_match and adv_match  # Changed from no match to match
-    
-    # Calculate perturbation magnitude
-    perturbation = adv_img.astype(np.float32) - img1.astype(np.float32)
-    l2_norm = np.sqrt(np.sum(perturbation**2))
-    linf_norm = np.max(np.abs(perturbation))
-    
-    # Display results as text
-    result_text = (
-        f"Attack: {attack_name}\n"
-        f"Original pair verification: {'Match' if orig_match else 'No Match'}\n"
-        f"Adversarial pair verification: {'Match' if adv_match else 'No Match'}\n"
-        f"Attack {'successful' if attack_success else 'failed'}\n"
-        f"L2 perturbation: {l2_norm:.2f}\n"
-        f"L∞ perturbation: {linf_norm:.2f}"
-    )
-    
-    plt.figtext(0.5, 0.01, result_text, ha='center', fontsize=12, bbox={"facecolor":"orange", "alpha":0.2, "pad":5})
-    
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.25)  # Make room for the text
-    plt.show()
-    
-    # Also display the perturbation itself (magnified for visibility)
-    plt.figure(figsize=(10, 5))
-    
-    # Normalize perturbation for better visualization
-    perturbation_vis = np.abs(perturbation)
-    perturbation_vis = perturbation_vis / np.max(perturbation_vis) * 255
-    
-    plt.imshow(perturbation_vis.astype(np.uint8))
-    plt.title(f"Perturbation Map ({attack_name})")
-    plt.colorbar(label="Magnitude")
-    plt.show()
-    
-    print(f"Attack was {'successful' if attack_success else 'unsuccessful'}")
-    os.remove(adv_img_path)
-    '''

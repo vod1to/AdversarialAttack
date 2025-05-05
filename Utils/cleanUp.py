@@ -1,6 +1,6 @@
 import os
 
-def delete_fgsm_adversarial_files(base_dir):
+def delete_adversarial_files(base_dir):
     # Walk through all directories and files
     count = 0
     for root, dirs, files in os.walk(base_dir):
@@ -22,4 +22,4 @@ def delete_fgsm_adversarial_files(base_dir):
 base_dir = 'E:/lfw/lfw-py/lfw_funneled'  
 
 # Run the deletion function
-delete_fgsm_adversarial_files(base_dir)
+delete_adversarial_files(base_dir)

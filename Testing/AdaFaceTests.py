@@ -9,7 +9,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from Model.Architecture import AdaFaceArchitecture
 import matplotlib.pyplot as plt
-from sphereUtils.matlab_cp2tform import get_similarity_transform_for_cv2
+from Utils.matlab_cp2tform import get_similarity_transform_for_cv2
 
 class AdaFaceAttackFramework:
     def __init__(self, data_dir, device='cuda'):
@@ -26,6 +26,7 @@ class AdaFaceAttackFramework:
         self.model = self.model.to(self.device)
         self.model.eval()
         self.landmark = {}
+        self.SimScore = []
         with open('Model/lfw_landmark/lfw_landmark.txt') as f:
             landmark_lines = f.readlines()
         for line in landmark_lines:
@@ -56,7 +57,7 @@ class AdaFaceAttackFramework:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 1:
+            if len(pairs) == 50:
                 break 
         # Different person pairs
         for i in range(len(classes)):
@@ -66,7 +67,7 @@ class AdaFaceAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 2:
+            if len(pairs) == 100:
                 break 
         return pairs
     def to_input(self,pil_rgb_image):
@@ -114,7 +115,7 @@ class AdaFaceAttackFramework:
             feature1, _ = self.model(bgr_tensor_input1)
             feature2, _ = self.model(bgr_tensor_input2)
         similarity_score = torch.mm(feature1, feature2.T).item()
-        print(similarity_score)
+        self.SimScore.append(similarity_score)
         return similarity_score > threshold
     def generateFGSMAttack(self, img1_path, img2_path, label=None, epsilon=8/255):
         # Extract person and file information from paths
@@ -807,8 +808,8 @@ class AdaFaceAttackFramework:
                         results['true_negative'] += 1
                 
                 # Clean up
-                #if os.path.exists(adv_img_path):
-                #    os.remove(adv_img_path)                
+                if os.path.exists(adv_img_path):
+                    os.remove(adv_img_path)                
             except Exception as e:
                 print(f"Error processing pair: {e}")
         
@@ -826,7 +827,7 @@ class AdaFaceAttackFramework:
         results = {}
         # Attack evaluations
 
-        for attack_type in ["Square"]:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
        # Clean performance
@@ -849,7 +850,14 @@ class AdaFaceAttackFramework:
             'far': clean_results['false_positive'] / (clean_results['false_positive'] + clean_results['true_negative']),
             'frr': clean_results['false_negative'] / (clean_results['false_negative'] + clean_results['true_positive'])
         }
+        self.save_l2_to_txt()
+
         return results
+    def save_l2_to_txt(self, filename="L2_Values/SimScore_values_Ada.txt"):
+        with open(filename, 'w') as f:
+            for value in self.SimScore:
+                f.write(f"{value}\n")
+        print(f"Saved {len(self.SimScore)} Similarity Score values to {filename}")
 
 
 if __name__ == "__main__":
