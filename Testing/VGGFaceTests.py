@@ -16,7 +16,7 @@ class VGGAttackFramework:
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.pairs = self.prepare_pairs()
         
-        # Initialize model
+        
         self.model = VGGFace().to(self.device)
         self.model.load_state_dict(torch.load(model_path))
         self.model.eval()
@@ -26,17 +26,17 @@ class VGGAttackFramework:
         classes = [d for d in os.listdir(self.data_dir) 
                   if os.path.isdir(os.path.join(self.data_dir, d))]
         
-        # Same person pairs
+        
         for person in classes:
             person_dir = os.path.join(self.data_dir, person)
             images = os.listdir(person_dir)
-            if len(images) >= 50:
+            if len(images) >= 2:
                 img1 = os.path.join(person_dir, images[0])
                 img2 = os.path.join(person_dir, images[1])
                 pairs.append((img1, img2, 1))
-            if len(pairs) == 50:
+            if len(pairs) == 1:
                 break
-        # Different person pairs
+        
         for i in range(len(classes)):
             for j in range(i + 1, min(i + 2, len(classes))):
                 img1 = os.path.join(self.data_dir, classes[i], 
@@ -44,39 +44,38 @@ class VGGAttackFramework:
                 img2 = os.path.join(self.data_dir, classes[j], 
                                   os.listdir(os.path.join(self.data_dir, classes[j]))[0])
                 pairs.append((img1, img2, 0))
-            if len(pairs) == 100:
+            if len(pairs) == 2:
                 break
 
         return pairs
     def verify_pair(self, img1_path, img2_path, threshold=1.2):
-        # Read and preprocess images
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
         
         img1 = cv2.resize(img1, (224, 224))
         img2 = cv2.resize(img2, (224, 224))
         
-        # Convert to torch tensor and normalize
+        
         img1 = torch.Tensor(img1).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         img2 = torch.Tensor(img2).float().permute(2, 0, 1).reshape(1, 3, 224, 224)
         
-        # VGG Face mean subtraction
+        
         mean = torch.Tensor(np.array([129.1863, 104.7624, 93.5940])).float().reshape(1, 3, 1, 1)
         img1 -= mean
         img2 -= mean
         
-        # Move to device
+        
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
         
         self.model.eval()      
         with torch.no_grad():
-            # Forward pass until fc7 for both images
+            
             feat1 = self.model.get_features(img1)
             feat2 = self.model.get_features(img2)
             feat1 = F.normalize(feat1, p=2, dim=1)
             feat2 = F.normalize(feat2, p=2, dim=1)
-            # Compute L2 distance
+            
             l2_distance = torch.norm(feat1 - feat2, p=2).item()
         self.L2.append(l2_distance)
         return l2_distance < threshold
@@ -98,17 +97,17 @@ class VGGAttackFramework:
         img2 = img2.to(self.device)
 
         img1_adv = img1.clone().detach().requires_grad_(True)
-        epsilon = 8/255  # Attack strength parameter
+        epsilon = 8/255  
     
         self.model.eval()
         feat1 = self.model.get_features(img1_adv)
         feat2 = self.model.get_features(img2)
     
-        # Normalize features
+        
         feat1 = F.normalize(feat1, p=2, dim=1)
         feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Compute L2 distance
+        
         distance = torch.norm(feat1 - feat2, p=2)
         
         if label == 1:  
@@ -118,18 +117,18 @@ class VGGAttackFramework:
         
 
         grad_sign = torch.autograd.grad(loss, img1_adv)[0]
-        # Apply perturbation
+        
         perturbed_image = img1 + epsilon * grad_sign.sign()
-        # Clamp to ensure valid pixel range
+        
         perturbed_image = torch.clamp(perturbed_image, 0, 255)
             
         
-        # Convert back to image format and save
+        
         adv_img = perturbed_image[0].permute(1, 2, 0).cpu().numpy()
-        adv_img += np.array([129.1863, 104.7624, 93.5940]) # Add back the mean
+        adv_img += np.array([129.1863, 104.7624, 93.5940]) 
         adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
         
-        # Save the adversarial example
+        
         output_path = img1_path.replace('.jpg', '_fgsm_adv.jpg')
         cv2.imwrite(output_path, adv_img)
         
@@ -151,14 +150,14 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
-        epsilon = 8/255  # Total perturbation constraint
-        alpha = epsilon/10  # Step size
-        steps = 20  # Number of attack iterations
+        epsilon = 8/255  
+        alpha = epsilon/10  
+        steps = 20  
 
         self.model.eval()
         perturbed_image = img1.clone().detach()
         
-        # Add small random noise to start
+        
         perturbed_image = perturbed_image + torch.empty_like(perturbed_image).uniform_(-epsilon, epsilon)
         perturbed_image = torch.clamp(perturbed_image, min=0, max=1).detach()
         
@@ -167,18 +166,18 @@ class VGGAttackFramework:
             feat2 = F.normalize(feat2, p=2, dim=1)
 
 
-        # Iterative attack
+        
         for _ in range(steps):
-            # Set requires_grad
+            
             perturbed_image.requires_grad = True
             
-            # Forward pass to get features
+            
             feat1 = self.model.get_features(perturbed_image)
             
-            # Normalize features
+            
             feat1 = F.normalize(feat1, p=2, dim=1)
             
-            # Compute L2 distance
+            
             distance = torch.norm(feat1 - feat2, p=2)
             
             if label == 1:  
@@ -186,17 +185,17 @@ class VGGAttackFramework:
             else:  
                 loss = -distance
             
-            # Take gradient step
+            
             grad = torch.autograd.grad(loss, perturbed_image)[0]
         
-            # Update and detach adversarial images
+            
             perturbed_image = perturbed_image.detach() + alpha * grad.sign() 
             
-            # Project back to epsilon ball and valid image range
+            
             delta = torch.clamp(perturbed_image - img1, min=-epsilon, max=epsilon)
             perturbed_image = torch.clamp(img1 + delta, min=0, max=255).detach()
         
-        # Convert to image and save
+        
         adv_img = perturbed_image[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_img += np.array([129.1863, 104.7624, 93.5940])
         adv_img = np.clip(adv_img, 0, 255).astype(np.uint8)
@@ -222,31 +221,31 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
-        # BIM parameters
-        epsilon = 8/255      # Total perturbation constraint
-        alpha = epsilon/10   # Step size per iteration
-        iterations = 20      # Number of attack iterations
+        
+        epsilon = 8/255      
+        alpha = epsilon/10   
+        iterations = 20      
 
-        # Extract features from target image
+        
         self.model.eval()
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Initialize adversarial example with the original image
+        
         adv_img = img1.clone().detach()
         ori_img = img1.clone().detach()
         
-        # BIM attack loop
+        
         for i in range(iterations):
-            # Reset gradients
+            
             adv_img.requires_grad = True
             
-            # Forward pass to get features
+            
             feat1 = self.model.get_features(adv_img)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
-            # Compute distance between feature vectors
+            
             distance = torch.norm(feat1 - feat2, p=2)
             
             if label == 1:  
@@ -254,10 +253,10 @@ class VGGAttackFramework:
             else:  
                 loss = -distance
             
-            # Compute gradients
+            
             grad = torch.autograd.grad(loss, adv_img)[0]
             
-            # Detach from computation graph
+            
             adv_img = adv_img.detach()
             
             adv_img = adv_img + alpha * torch.sign(grad)
@@ -265,10 +264,10 @@ class VGGAttackFramework:
             b = (adv_img >= a).float() * adv_img + (adv_img < a).float() * a
             c = (b > ori_img + epsilon).float() * (ori_img + epsilon) + (b <= ori_img + epsilon).float() * b
             
-            # Ensure pixel values stay within valid range
+            
             adv_img = torch.clamp(c, min=0, max=255).detach()
         
-        # Convert to image and save
+        
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
@@ -294,37 +293,37 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
-        # MI-FGSM parameters
-        epsilon = 8/255       # Total perturbation constraint
-        alpha = epsilon/10    # Step size per iteration
-        iterations = 20       # Number of attack iterations
-        decay_factor = 0.9    # Momentum decay factor
+        
+        epsilon = 8/255       
+        alpha = epsilon/10    
+        iterations = 20       
+        decay_factor = 0.9    
 
-        # Extract features from target image
+        
         self.model.eval()
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Initialize adversarial example with the original image
+        
         adv_img = img1.clone().detach()
         
-        # Initialize the momentum term to zero
+        
         momentum = torch.zeros_like(img1).to(self.device)
         
-        # MI-FGSM attack loop
+        
         for i in range(iterations):
-            # Reset gradients
+            
             adv_img.requires_grad = True
             
-            # Forward pass to get features
+            
             feat1 = self.model.get_features(adv_img)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
-            # Compute distance between feature vectors
+            
             distance = torch.norm(feat1 - feat2, p=2)
             
-            # Define loss based on attack goal
+            
             if label == 1:  
                 loss = distance
             else:  
@@ -332,13 +331,13 @@ class VGGAttackFramework:
             
             grad = torch.autograd.grad(loss, adv_img)[0]
             
-            # Detach from computation graph
+            
             adv_img = adv_img.detach()
             
             grad_norm = torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
             grad = grad / grad_norm 
             
-            # Update momentum term
+            
             grad = grad + momentum * decay_factor
             momentum = grad            
             adv_img = adv_img + alpha * grad.sign()
@@ -346,7 +345,7 @@ class VGGAttackFramework:
             delta = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta
             adv_img = torch.clamp(adv_img, min=0, max=255)
-        # Convert to image and save
+        
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
@@ -372,52 +371,52 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
         
-        # Following torchattacks approach
+        
         self.model.eval()
         
-        # Functions from torchattacks
+        
         def tanh_space(x):
             return 0.5 * (torch.tanh(x) + 1)
         
         def inverse_tanh_space(x):
             return torch.atanh(torch.clamp(x * 2 - 1, min=-1, max=1))
         
-        # Initialize w in the inverse tanh space
-        w = inverse_tanh_space(img1 / 255.0).detach()  # Convert to [0,1] range first
+        
+        w = inverse_tanh_space(img1 / 255.0).detach()  
         w.requires_grad = True
         
-        # Set up optimizer
+        
         optimizer = torch.optim.Adam([w], lr=lr)
         
-        # Initialize best adversarial example
+        
         best_adv_images = img1.clone().detach()
         best_L2 = 1e10 * torch.ones((len(img1))).to(self.device)
         prev_cost = 1e10
         
-        # Extract features from target image
+        
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Prepare loss functions
+        
         MSELoss = nn.MSELoss(reduction="none")
         Flatten = nn.Flatten()
         
-        # Optimization loop
+        
         for step in range(steps):
-            # Get adversarial images in [0,1] space and rescale to original range
-            adv_images_norm = tanh_space(w)
-            adv_images = adv_images_norm * 255.0  # Back to [0,255] range
             
-            # Calculate L2 distance loss (in pixel space)
+            adv_images_norm = tanh_space(w)
+            adv_images = adv_images_norm * 255.0  
+            
+            
             current_L2 = MSELoss(Flatten(adv_images_norm), Flatten(img1 / 255.0)).sum(dim=1)
             L2_loss = current_L2.sum()
             
-            # Get features of adversarial image
+            
             feat1 = self.model.get_features(adv_images)
             feat1 = F.normalize(feat1, p=2, dim=1)
             
-            # Calculate feature distance
+            
             distance = torch.norm(feat1 - feat2, p=2, dim=1)
             threshold = 1.2
 
@@ -427,10 +426,10 @@ class VGGAttackFramework:
             else:  
                 f_loss = torch.clamp(threshold - distance + kappa, min=0).sum()
             
-            # Total cost
+            
             cost = L2_loss + c * f_loss
             
-            # Gradient step
+            
             optimizer.zero_grad()
             cost.backward()
             optimizer.step()
@@ -441,21 +440,21 @@ class VGGAttackFramework:
             else: 
                 condition = (distance > threshold).float()
             
-            # Filter out images that either don't meet the condition or have larger L2
+            
             mask = condition * (best_L2 > current_L2.detach())
             best_L2 = mask * current_L2.detach() + (1 - mask) * best_L2
             
-            # Update best adversarial images
+            
             mask = mask.view([-1] + [1] * (len(adv_images.shape) - 1))
             best_adv_images = mask * adv_images.detach() + (1 - mask) * best_adv_images
             
-            # Early stop when loss does not converge
+            
             if step % max(steps // 10, 1) == 0:
                 if cost.item() > prev_cost:
                     break
                 prev_cost = cost.item()
         
-        # Add mean back to final result
+        
         adv_output = best_adv_images[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
 
@@ -483,22 +482,22 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
-        # SPSA parameters
-        epsilon = 8/255        # Total perturbation constraint
-        iterations = 100       # Number of attack iterations
-        learning_rate = 0.01   # Learning rate for optimization
-        delta = 0.01           # Perturbation size for gradient estimation
         
-        # Extract features from target image
+        epsilon = 8/255        
+        iterations = 100       
+        learning_rate = 0.01   
+        delta = 0.01           
+        
+        
         self.model.eval()
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Initialize adversarial example with the original image
+        
         adv_img = img1.clone().detach()
         
-        # Function to compute loss based on goal
+        
         def compute_loss(perturbed_img):
             with torch.no_grad():
                 feat = self.model.get_features(perturbed_img)
@@ -510,12 +509,12 @@ class VGGAttackFramework:
                 else:  
                     return -distance
         
-        # SPSA attack loop
+        
         for i in range(iterations):
-            # Create random perturbation direction (Bernoulli distribution {-1, 1})
-            bernoulli = torch.randint(0, 2, adv_img.shape).to(self.device) * 2 - 1  # -1 or 1
             
-            # Evaluate loss at points in both positive and negative directions
+            bernoulli = torch.randint(0, 2, adv_img.shape).to(self.device) * 2 - 1  
+            
+            
             pos_perturbed = adv_img + delta * bernoulli
             pos_perturbed = torch.clamp(pos_perturbed, 0, 255)
             loss_pos = compute_loss(pos_perturbed)
@@ -524,28 +523,28 @@ class VGGAttackFramework:
             neg_perturbed = torch.clamp(neg_perturbed, 0, 255)
             loss_neg = compute_loss(neg_perturbed)
             
-            # Estimate gradient using finite differences
+            
             gradient_estimate = (loss_pos - loss_neg) / (2 * delta)
             
-            # Update the adversarial example in the direction of the estimated gradient
-            # Note the sign: We use minus for gradient descent direction
+            
+            
             if label == 1: 
                 update_direction = -1
             else:  
                 update_direction = 1
                 
-            # Apply estimated gradient to update the adversarial example
+            
             adv_img = adv_img + update_direction * learning_rate * gradient_estimate * bernoulli
             
-            # Project back to epsilon-ball around original image and ensure valid pixel range
+            
             delta_img = torch.clamp(adv_img - img1, min=-epsilon, max=epsilon)
             adv_img = img1 + delta_img
             adv_img = torch.clamp(adv_img, 0, 255)
             
-            # Optionally reduce learning rate over time (learning rate decay)
+            
             learning_rate = learning_rate * 0.99
         
-        # Convert to image and save
+        
         adv_output = adv_img[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
@@ -570,19 +569,19 @@ class VGGAttackFramework:
         img1 = img1.to(self.device)
         img2 = img2.to(self.device)
 
-        # Square attack parameters
+        
         epsilon = 8/255
         
-        # Extract features from target image
+        
         self.model.eval()
         with torch.no_grad():
             feat2 = self.model.get_features(img2)
             feat2 = F.normalize(feat2, p=2, dim=1)
         
-        # Initialize adversarial example with the original image
+        
         x_adv = img1.clone().detach()
         
-        # Function to evaluate distance
+        
         def compute_distance(x):
             with torch.no_grad():
                 feat = self.model.get_features(x)
@@ -590,7 +589,7 @@ class VGGAttackFramework:
                 distance = torch.norm(feat - feat2, p=2)
                 return distance.item()
         
-        # Determine the best distance based on the attack goal
+        
         if label == 1:  
             best_distance = compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist < curr_dist
@@ -598,54 +597,54 @@ class VGGAttackFramework:
             best_distance = -compute_distance(x_adv)
             is_better = lambda new_dist, curr_dist: new_dist > curr_dist
         
-        # Reshape image for easier manipulation
-        h, w = 224, 224  # Image height and width
         
-        # Main attack loop
+        h, w = 224, 224  
+        
+        
         for i in range(n_iters):
-            # Calculate current p (decreases over iterations)
+            
             p = p_init * (1 - i / n_iters)**0.5
             
-            # Calculate square size based on p
+            
             s = int(round(np.sqrt(p * h * w)))
             s = max(1, min(s, h, w))
             
-            # Randomly select square position
+            
             h_start = np.random.randint(0, h - s + 1)
             w_start = np.random.randint(0, w - s + 1)
             
-            # Randomly select channel to perturb (or all channels)
-            channel = np.random.choice([-1, 0, 1, 2])  # -1 means all channels
             
-            # Create a copy of the current best adversarial example
+            channel = np.random.choice([-1, 0, 1, 2])  
+            
+            
             x_new = x_adv.clone().detach()
             
-            # Generate perturbation
+            
             noise = torch.empty((1, 1 if channel != -1 else 3, s, s), device=self.device).uniform_(-epsilon, epsilon)
             
-            # Apply the perturbation to the selected region
-            if channel == -1:  # Apply to all channels
+            
+            if channel == -1:  
                 x_new[0, :, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
                     img1[0, :, h_start:h_start+s, w_start:w_start+s] + noise, 0, 255)
-            else:  # Apply to specific channel
+            else:  
                 x_new[0, channel, h_start:h_start+s, w_start:w_start+s] = torch.clamp(
                     img1[0, channel, h_start:h_start+s, w_start:w_start+s] + noise.squeeze(1), 0, 255)
             
-            # Calculate new distance
-            if label == 1:  # Minimize distance
+            
+            if label == 1:  
                 new_distance = compute_distance(x_new)
-            else:  # Maximize distance
+            else:  
                 new_distance = -compute_distance(x_new)
             
-            # Update best adversarial example if the perturbation improves it
+            
             if is_better(new_distance, best_distance):
                 x_adv = x_new
                 best_distance = new_distance
                 
-            # Early stopping if we've reached a very good solution
+            
             if (label == 1 and best_distance < 0.5) or (label == 0 and -best_distance > 2.0):
                 break
-        # Convert to image and save
+        
         adv_output = x_adv[0].permute(1, 2, 0).contiguous().cpu().numpy()
         adv_output += np.array([129.1863, 104.7624, 93.5940])
         adv_output = np.clip(adv_output, 0, 255).astype(np.uint8)
@@ -662,7 +661,7 @@ class VGGAttackFramework:
         
         for img1_path, img2_path, label in tqdm(self.pairs):
             try:                
-                # Apply attack
+                
                 if attack_type == "FGSM":
                     adv_img_path = self.generateFGSMAttack(img1_path, img2_path, label)
                 elif attack_type == "PGD": 
@@ -678,10 +677,10 @@ class VGGAttackFramework:
                     adv_img_path = self.generateSPSAAttack(img1_path, img2_path, label)
                 elif attack_type == "Square":
                     adv_img_path = self.generateSquareAttack(img1_path, img2_path, label)
-                # Verify
+                
                 prediction = self.verify_pair(adv_img_path, img2_path)
                 
-                # Update results
+                
                 if label == 1:
                     if prediction: 
                         results['true_positive'] += 1
@@ -693,14 +692,14 @@ class VGGAttackFramework:
                     else: 
                         results['true_negative'] += 1
                 
-                # Clean up
-                if os.path.exists(adv_img_path):
-                    os.remove(adv_img_path)
+                
+                
+                
                 
             except Exception as e:
                 print(f"Error processing pair: {e}")
         
-        # Calculate metrics
+        
         total = sum(results.values())
         
         if total == 0:
@@ -712,12 +711,12 @@ class VGGAttackFramework:
             'attack_success_rate': (results['false_negative'] + results['false_positive']) / total}
     def run_evaluation(self):
         results = {}
-        # Attack evaluations
+        
 
-        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square"]:
+        for attack_type in ["FGSM", "PGD", "BIM", "MIFGSM", "CW","SPSA","Square"]:
             print(f"\nEvaluating {attack_type} attack...")
             results[attack_type] = self.evaluate_attack(attack_type)
-       # Clean performance
+       
         print("Evaluating clean performance...")
         clean_results = {'true_positive': 0, 'true_negative': 0,
                         'false_positive': 0, 'false_negative': 0}
@@ -740,7 +739,7 @@ class VGGAttackFramework:
         self.save_l2_to_txt()
 
         return results
-    def save_l2_to_txt(self, filename="L2_Values/l2_values_VGG.txt"):
+    def save_l2_to_txt(self, filename="Verification_metric/l2_values_VGG.txt"):
         with open(filename, 'w') as f:
             for value in self.L2:
                 f.write(f"{value}\n")
@@ -748,8 +747,8 @@ class VGGAttackFramework:
 
 if __name__ == "__main__":
     framework = VGGAttackFramework(
-        data_dir='E:/lfw/lfw-py/lfw_funneled',
-        model_path='E:/AdversarialAttack-2/Model/Weights/vgg_face_dag.pth'
+        data_dir='./lfw_funneled',
+        model_path='./Model/Weights/vgg_face_dag.pth'
     )
     results = framework.run_evaluation()
     for scenario, metrics in results.items():

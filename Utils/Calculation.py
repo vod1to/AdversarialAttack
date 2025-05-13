@@ -1,9 +1,17 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import seaborn as sns
-
-def analyze_model_l2_degradation(file_path, model_name):
+def analyze_model_l2_degradation(file_path, model_name, genuine_count=1680, impostor_count=5748):
+    """
+    Analyze model degradation for LFW dataset with 7,428 verification pairs.
+    
+    Parameters:
+    - file_path: Path to the similarity score values file
+    - model_name: Name of the model being analyzed
+    - genuine_count: Number of genuine pairs (default: 1680)
+    - impostor_count: Number of impostor pairs (default: 5748)
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import os
+    
     # Read the file
     with open(file_path, 'r') as file:
         lines = file.readlines()
@@ -14,22 +22,24 @@ def analyze_model_l2_degradation(file_path, model_name):
     # Define attack types
     attacks = ["FGSM", "PGD", "BIM", "MIFGSM", "CW", "SPSA", "Square", "Baseline"]
     
-    # Assuming each attack has 100 values: 50 genuine pairs followed by 50 impostor pairs
+    # Calculate total pairs per attack type
+    pairs_per_attack = genuine_count + impostor_count
+    
     genuine_data = {}
     impostor_data = {}
     
-    # Split data into genuine and impostor pairs
+    # Split data into genuine and impostor pairs for each attack
     for i, attack in enumerate(attacks):
-        start_idx = i * 100
-        mid_idx = start_idx + 50
-        end_idx = start_idx + 100
+        start_idx = i * pairs_per_attack
+        mid_idx = start_idx + genuine_count
+        end_idx = start_idx + pairs_per_attack
         
         if i < 7:  # For the attack types
             genuine_values = values[start_idx:mid_idx]
             impostor_values = values[mid_idx:end_idx]
         else:  # For the baseline
-            genuine_values = values[700:750]
-            impostor_values = values[750:800]
+            genuine_values = values[7 * pairs_per_attack : 7 * pairs_per_attack + genuine_count]
+            impostor_values = values[7 * pairs_per_attack + genuine_count : 8 * pairs_per_attack]
             
         genuine_data[attack] = genuine_values
         impostor_data[attack] = impostor_values
@@ -47,39 +57,30 @@ def analyze_model_l2_degradation(file_path, model_name):
     impostor_degradation = {}
     
     for attack in attacks[:-1]:  # Exclude baseline
-        # For genuine pairs: negative change is good, positive change is bad
         genuine_current = genuine_avg[attack]
         genuine_deg = ((genuine_current - genuine_baseline) / genuine_baseline) * 100
         genuine_degradation[attack] = genuine_deg
         
-        # For impostor pairs: positive change is good, negative change is bad
         impostor_current = impostor_avg[attack]
         impostor_deg = ((impostor_current - impostor_baseline) / impostor_baseline) * 100
         impostor_degradation[attack] = impostor_deg
     
-    # Create DataFrames
-    df_genuine_avg = pd.DataFrame([genuine_avg], index=[f"{model_name}_Genuine"])
-    df_impostor_avg = pd.DataFrame([impostor_avg], index=[f"{model_name}_Impostor"])
-    
-    df_genuine_deg = pd.DataFrame([genuine_degradation], index=[f"{model_name}_Genuine"])
-    df_impostor_deg = pd.DataFrame([impostor_degradation], index=[f"{model_name}_Impostor"])
+    # Create directory for graphs if it doesn't exist
+    os.makedirs("Graphs", exist_ok=True)
     
     # Create visualizations with appropriate interpretation
-    
-    # Genuine pairs visualization (negative change is good - inverting the color scheme)
     plt.figure(figsize=(10, 6))
     attacks_without_baseline = attacks[:-1]
     genuine_deg_values = [genuine_degradation[a] for a in attacks_without_baseline]
     bars = plt.bar(attacks_without_baseline, genuine_deg_values)
     
-    # Color bars based on interpretation (red for bad, green for good)
     for i, bar in enumerate(bars):
-        if genuine_deg_values[i] > 0:  # Increase in L2 for genuine pairs is bad
+        if genuine_deg_values[i] < 0:  
             bar.set_color('green')
-        else:  # Decrease in L2 for genuine pairs is good
+        else:  
             bar.set_color('red')
     
-    plt.title(f"Similarity Score Change for {model_name} - Genuine Pairs\n(Positive % is better robustness)")
+    plt.title(f"Similarity Score Change for {model_name} - Genuine Pairs\n(Negative % is better robustness)")
     plt.xlabel("Attack Type")
     plt.ylabel("% Change from Baseline")
     plt.xticks(rotation=45)
@@ -88,19 +89,17 @@ def analyze_model_l2_degradation(file_path, model_name):
     plt.tight_layout()
     plt.savefig(f"Graphs/{model_name}_genuine_l2_change.png", dpi=300)
     
-    # Impostor pairs visualization (positive change is good)
     plt.figure(figsize=(10, 6))
     impostor_deg_values = [impostor_degradation[a] for a in attacks_without_baseline]
     bars = plt.bar(attacks_without_baseline, impostor_deg_values)
     
-    # Color bars based on interpretation (red for bad, green for good)
     for i, bar in enumerate(bars):
-        if impostor_deg_values[i] < 0:  # Decrease in L2 for impostor pairs is bad
+        if impostor_deg_values[i] > 0:  
             bar.set_color('green')
-        else:  # Increase in L2 for impostor pairs is good
+        else:  
             bar.set_color('red')
     
-    plt.title(f"Similarity Score Change for {model_name} - Impostor Pairs\n(Negative % is better robustness)")
+    plt.title(f"Similarity Score Change for {model_name} - Impostor Pairs\n(Positive % is better robustness)")
     plt.xlabel("Attack Type")
     plt.ylabel("% Change from Baseline")
     plt.xticks(rotation=45)
@@ -109,9 +108,9 @@ def analyze_model_l2_degradation(file_path, model_name):
     plt.tight_layout()
     plt.savefig(f"Graphs/{model_name}_impostor_l2_change.png", dpi=300)
     
-    # Print results
     print(f"\nResults for {model_name}:")
     
+    #INVERT THIS IF SIMILARITY SCORE
     print("\nGenuine Pairs - L2 Distance Change (negative % is better):")
     for attack, value in genuine_degradation.items():
         status = "BETTER" if value < 0 else "WORSE"
@@ -122,12 +121,14 @@ def analyze_model_l2_degradation(file_path, model_name):
         status = "BETTER" if value > 0 else "WORSE"
         print(f"{attack}: {value:.2f}% ({status})")
     
+    return genuine_degradation, impostor_degradation
+
 
 # Run the analysis
 if __name__ == "__main__":
     model_name = "AdaFace"  # Change this for each model
-    file_path = "E:\AdversarialAttack-2\L2_Values\SimScore_values_Ada.txt" 
+    file_path = "./Verification_metric/SimScore_values_Ada.txt" 
     
-    analyze_model_l2_degradation(file_path, model_name)
+    analyze_model_l2_degradation(file_path, model_name, genuine_count=1680, impostor_count=5748)
     
-    print(f"Analysis complete for {model_name}. Check the generated C images.")
+    print(f"Analysis complete for {model_name}. Check the generated images.")

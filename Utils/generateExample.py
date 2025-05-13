@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
-from Utils.matlab_cp2tform import get_similarity_transform_for_cv2
-model = "Facenet" #INPUT YOUR MODEL NAME OPTIONS: "Ada" "Sphere" "VGG" "Facenet"
+from matlab_cp2tform import get_similarity_transform_for_cv2
+model = "VGG" #INPUT YOUR MODEL NAME OPTIONS: "Ada" "Sphere" "VGG" "Facenet"
 landmark = {}
 with open('Model/lfw_landmark/lfw_landmark.txt') as f:
         landmark_lines = f.readlines()
@@ -139,9 +139,9 @@ def visualize_attack(original_path, adversarial_path, target_path=None, save_pat
 # Example usage
 if __name__ == "__main__":
     # Replace these with your actual image paths
-    original_image_path = "E:\lfw\lfw-py\lfw_funneled\Aaron_Peirsol\Aaron_Peirsol_0001.jpg"
-    adversarial_image_path = "E:\lfw\lfw-py\lfw_funneled\Aaron_Peirsol\Aaron_Peirsol_0001.jpg"
-    target_image_path =  "E:\lfw\lfw-py\lfw_funneled\Aaron_Peirsol\Aaron_Peirsol_0002.jpg" # Optional, set to None if not available
+    original_image_path = "E:\AdversarialAttack-2\lfw_funneled\Aaron_Eckhart\Aaron_Eckhart_0001.jpg"
+    adversarial_image_path = "E:\AdversarialAttack-2\lfw_funneled\Aaron_Eckhart\Aaron_Eckhart_0001_square_adv.jpg"
+    target_image_path =  "E:\AdversarialAttack-2\lfw_funneled\Aaron_Guiel\Aaron_Guiel_0001.jpg"# Optional, set to None if not available
     
     # Call with target image
     visualize_attack(

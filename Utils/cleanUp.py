@@ -17,9 +17,6 @@ def delete_adversarial_files(base_dir):
     
     print(f"Total files deleted: {count}")
 
-# Set the base directory to your LFW dataset directory
-# Adjust this path to match your dataset location
-base_dir = 'E:/lfw/lfw-py/lfw_funneled'  
+base_dir = './lfw_funneled'  
 
-# Run the deletion function
 delete_adversarial_files(base_dir)
