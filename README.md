@@ -1,4 +1,8 @@
-Install Facenet using pip: !pip install facenet-pytorch
+INSTALL FACENET WITH PIP: !pip install facenet-pytorch
+DOWNLOAD THE LFW DATASET @ KAGGLE https://www.kaggle.com/datasets/jessicali9530/lfw-dataset. 
+Right now the code in the test files is looking for a directory called lfw_funneled that contains directories to images. Adjust if needed. 
+
+
 Run files in testing for experimental results. Clean up can be commented out under the "evaluate_attack" function
 Adjust amount of pairs prepared in "prepair_pairs" functions, set to 0 for full dataset evaluation. 
 Files under the utils were used to generate the graphs and examples in the dissertaion. 
