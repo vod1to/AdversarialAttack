@@ -1,5 +1,6 @@
 Final year project for Minh Pham @ University of Surrey. Survery for publicly available facial recognition models robustness against adversarial attacks.
-Models: Facenet, Spherenet, 
+Models: Facenet, Spherenet and 2 more added later. 
+Attacks. FGSM, SGD, MIFGSM, Square and 3 more added later
 
 
 INSTALL FACENET WITH PIP: !pip install facenet-pytorch
