@@ -1,3 +1,7 @@
+Final year project for Minh Pham @ University of Surrey. Survery for publicly available facial recognition models robustness against adversarial attacks.
+Models: Facenet, Spherenet, 
+
+
 INSTALL FACENET WITH PIP: !pip install facenet-pytorch
 DOWNLOAD THE LFW DATASET @ KAGGLE https://www.kaggle.com/datasets/jessicali9530/lfw-dataset. 
 Right now the code in the test files is looking for a directory called lfw_funneled that contains directories to images. Adjust if needed. 
